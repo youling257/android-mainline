@@ -529,30 +529,6 @@ drm_render_driver_and_ioctl(const struct drm_device *dev, u32 flags)
  */
 int drm_ioctl_permit(u32 flags, struct drm_file *file_priv)
 {
-	const struct drm_device *dev = file_priv->minor->dev;
-
-	/* ROOT_ONLY is only for CAP_SYS_ADMIN */
-	if (unlikely((flags & DRM_ROOT_ONLY) && !capable(CAP_SYS_ADMIN)))
-		return -EACCES;
-
-	/* AUTH is only for master ... */
-	if (unlikely((flags & DRM_AUTH) && drm_is_primary_client(file_priv))) {
-		/* authenticated ones, or render capable on DRM_RENDER_ALLOW. */
-		if (!file_priv->authenticated &&
-		    !drm_render_driver_and_ioctl(dev, flags))
-			return -EACCES;
-	}
-
-	/* MASTER is only for master or control clients */
-	if (unlikely((flags & DRM_MASTER) &&
-		     !drm_is_current_master(file_priv)))
-		return -EACCES;
-
-	/* Render clients must be explicitly allowed */
-	if (unlikely(!(flags & DRM_RENDER_ALLOW) &&
-		     drm_is_render_client(file_priv)))
-		return -EACCES;
-
 	return 0;
 }
 EXPORT_SYMBOL(drm_ioctl_permit);
