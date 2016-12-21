@@ -9176,6 +9176,11 @@ F:	include/linux/dt-bindings/mux/
 F:	include/linux/mux/
 F:	drivers/mux/
 
+MULTIPLEXER SUBSYSTEM INTEL CHT USB MUX DRIVER
+M:	Hans de Goede <hdegoede@redhat.com>
+S:	Maintained
+F:	drivers/mix/intel-cht-usb-mux.c
+
 MULTISOUND SOUND DRIVER
 M:	Andrew Veliath <andrewtv@usa.net>
 S:	Maintained
