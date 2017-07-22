@@ -38,6 +38,7 @@ struct gpio_button_data {
 
 	unsigned short *code;
 
+	struct timer_list unsuspend_timer;
 	struct timer_list release_timer;
 	unsigned int release_delay;	/* in msecs, for IRQ-only buttons */
 
@@ -371,6 +372,9 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 		return;
 	}
 
+	if (state && bdata->button->no_wakeup_events && bdata->suspended)
+		return;
+
 	if (type == EV_ABS) {
 		if (state)
 			input_event(input, type, button->code, button->value);
@@ -399,6 +403,9 @@ static irqreturn_t gpio_keys_gpio_isr(int irq, void *dev_id)
 
 	if (bdata->button->wakeup) {
 		const struct gpio_keys_button *button = bdata->button;
+
+		if (bdata->button->no_wakeup_events && bdata->suspended)
+			return IRQ_HANDLED;
 
 		pm_stay_awake(bdata->input->dev.parent);
 		if (bdata->suspended  &&
@@ -445,8 +452,12 @@ static irqreturn_t gpio_keys_irq_isr(int irq, void *dev_id)
 	spin_lock_irqsave(&bdata->lock, flags);
 
 	if (!bdata->key_pressed) {
-		if (bdata->button->wakeup)
+		if (bdata->button->wakeup) {
 			pm_wakeup_event(bdata->input->dev.parent, 0);
+
+			if (bdata->button->no_wakeup_events && bdata->suspended)
+				goto out;
+		}
 
 		input_event(input, EV_KEY, *bdata->code, 1);
 		input_sync(input);
@@ -468,6 +479,13 @@ out:
 	return IRQ_HANDLED;
 }
 
+static void gpio_keys_unsuspend_timer(unsigned long _data)
+{
+	struct gpio_button_data *bdata = (struct gpio_button_data *)_data;
+
+	bdata->suspended = false;
+}
+
 static void gpio_keys_quiesce_key(void *data)
 {
 	struct gpio_button_data *bdata = data;
@@ -476,6 +494,8 @@ static void gpio_keys_quiesce_key(void *data)
 		cancel_delayed_work_sync(&bdata->work);
 	else
 		del_timer_sync(&bdata->release_timer);
+
+	del_timer_sync(&bdata->unsuspend_timer);
 }
 
 static int gpio_keys_setup_key(struct platform_device *pdev,
@@ -496,6 +516,8 @@ static int gpio_keys_setup_key(struct platform_device *pdev,
 	bdata->input = input;
 	bdata->button = button;
 	spin_lock_init(&bdata->lock);
+	setup_timer(&bdata->unsuspend_timer, gpio_keys_unsuspend_timer,
+		    (unsigned long)bdata);
 
 	if (child) {
 		bdata->gpiod = devm_fwnode_get_gpiod_from_child(dev, NULL,
@@ -857,6 +879,7 @@ static int __maybe_unused gpio_keys_suspend(struct device *dev)
 			struct gpio_button_data *bdata = &ddata->data[i];
 			if (bdata->button->wakeup)
 				enable_irq_wake(bdata->irq);
+			del_timer_sync(&bdata->unsuspend_timer);
 			bdata->suspended = true;
 		}
 	} else {
@@ -881,7 +904,13 @@ static int __maybe_unused gpio_keys_resume(struct device *dev)
 			struct gpio_button_data *bdata = &ddata->data[i];
 			if (bdata->button->wakeup)
 				disable_irq_wake(bdata->irq);
-			bdata->suspended = false;
+			if (bdata->button->no_wakeup_events) {
+				mod_timer(&bdata->unsuspend_timer, jiffies +
+					  msecs_to_jiffies(
+						    bdata->software_debounce));
+			} else {
+				bdata->suspended = false;
+			}
 		}
 	} else {
 		mutex_lock(&input->mutex);
