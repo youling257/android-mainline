@@ -27,6 +27,7 @@ struct soc_button_info {
 	unsigned int event_code;
 	bool autorepeat;
 	bool wakeup;
+	bool no_wakeup_events;
 };
 
 /*
@@ -100,6 +101,7 @@ soc_button_device_create(struct platform_device *pdev,
 		gpio_keys[n_buttons].active_low = 1;
 		gpio_keys[n_buttons].desc = info->name;
 		gpio_keys[n_buttons].wakeup = info->wakeup;
+		gpio_keys[n_buttons].no_wakeup_events = info->no_wakeup_events;
 		/* These devices often use cheap buttons, use 50 ms debounce */
 		gpio_keys[n_buttons].debounce_interval = 50;
 		n_buttons++;
@@ -185,6 +187,7 @@ static int soc_button_parse_btn_desc(struct device *dev,
 		info->name = "power";
 		info->event_code = KEY_POWER;
 		info->wakeup = true;
+		info->no_wakeup_events = true;
 	} else if (upage == 0x07 && usage == 0xe3) {
 		info->name = "home";
 		info->event_code = KEY_LEFTMETA;
@@ -369,7 +372,7 @@ static int soc_button_probe(struct platform_device *pdev)
  * Platforms"
  */
 static struct soc_button_info soc_button_PNP0C40[] = {
-	{ "power", 0, EV_KEY, KEY_POWER, false, true },
+	{ "power", 0, EV_KEY, KEY_POWER, false, true, true },
 	{ "home", 1, EV_KEY, KEY_LEFTMETA, false, true },
 	{ "volume_up", 2, EV_KEY, KEY_VOLUMEUP, true, false },
 	{ "volume_down", 3, EV_KEY, KEY_VOLUMEDOWN, true, false },
