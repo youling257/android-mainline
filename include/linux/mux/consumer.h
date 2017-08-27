@@ -18,6 +18,25 @@
 struct device;
 struct mux_control;
 
+/**
+ * struct mux_lookup -	Mux consumer to mux-controller lookup table entry
+ * @list:		List head, internal use only.
+ * @provider:		dev_name() of the mux-chip's parent-dev.
+ * @index:		mux-controller's index in the mux-chip's mux array
+ * @dev_id:		dev_name() of the consumer to map to this controller
+ * @mux_name		name the consumer passes to mux_control_get
+ */
+struct mux_lookup {
+	struct list_head list;
+	const char *provider;
+	unsigned int index;
+	const char *dev_id;
+	const char *mux_name;
+};
+
+void mux_add_table(struct mux_lookup *table, size_t num);
+void mux_remove_table(struct mux_lookup *table, size_t num);
+
 unsigned int mux_control_states(struct mux_control *mux);
 int __must_check mux_control_select(struct mux_control *mux,
 				    unsigned int state);
