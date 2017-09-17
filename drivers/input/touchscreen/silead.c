@@ -65,6 +65,26 @@
 
 #define SILEAD_MAX_FINGERS	10
 
+static int max_x = 4095;
+module_param(max_x, int, 0444);
+MODULE_PARM_DESC(max_x, "maximum X coordinate (default: 4095)");
+
+static int max_y = 4095;
+module_param(max_y, int, 0444);
+MODULE_PARM_DESC(max_y, "maximum Y coordinate (default: 4095)");
+
+static bool invert_x = false;
+module_param(invert_x, bool, 0444);
+MODULE_PARM_DESC(invert_x, "invert X coordinate (default: no)");
+
+static bool invert_y = false;
+module_param(invert_y, bool, 0444);
+MODULE_PARM_DESC(invert_y, "invert Y coordinate (default: no)");
+
+static bool swap_x_y = false;
+module_param(swap_x_y, bool, 0444);
+MODULE_PARM_DESC(swap_x_y, "swap X and Y coordinates (default: no)");
+
 enum silead_ts_power {
 	SILEAD_POWER_ON  = 1,
 	SILEAD_POWER_OFF = 0
@@ -101,9 +121,21 @@ static int silead_ts_request_input_dev(struct silead_ts_data *data)
 		return -ENOMEM;
 	}
 
-	input_set_abs_params(data->input, ABS_MT_POSITION_X, 0, 4095, 0, 0);
-	input_set_abs_params(data->input, ABS_MT_POSITION_Y, 0, 4095, 0, 0);
+	input_set_abs_params(data->input, ABS_MT_POSITION_X, 0, max_x, 0, 0);
+	input_set_abs_params(data->input, ABS_MT_POSITION_Y, 0, max_y, 0, 0);
 	touchscreen_parse_properties(data->input, true, &data->prop);
+	
+	if (invert_x) {
+		data->prop.invert_x = true;
+	}
+
+	if (invert_y) {
+		data->prop.invert_y = true;
+	}
+
+	if (swap_x_y) {
+		data->prop.swap_x_y = true;
+	}
 
 	input_mt_init_slots(data->input, data->max_fingers,
 			    INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED |
