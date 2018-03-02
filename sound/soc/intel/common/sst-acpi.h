@@ -56,5 +56,4 @@ struct sst_acpi_mach {
 	const char *board;
 	struct sst_acpi_mach * (*machine_quirk)(void *arg);
 	void *pdata;
-	bool streams_lost_on_suspend;
 };
