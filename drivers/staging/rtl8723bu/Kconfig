@@ -1,0 +1,11 @@
+config RTL8723BU
+	tristate "Realtek RTL8723BU Wireless LAN NIC driver"
+	depends on WLAN && USB && CFG80211
+	depends on m
+	select WIRELESS_EXT
+	select WEXT_PRIV
+	---help---
+	This option enables support for RTL8723BU USB drivers, such as
+	the wifi found on the 1st gen Intel Compute Stick, the CHIP
+	and many other Intel Atom and ARM based devices.
+	If built as a module, it will be called r8723bu.
