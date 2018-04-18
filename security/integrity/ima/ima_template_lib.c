@@ -236,8 +236,12 @@ static int ima_eventdigest_init_common(u8 *digest, u32 digestsize, u8 hash_algo,
 
 	if (hash_algo < HASH_ALGO__LAST) {
 		fmt = DATA_FMT_DIGEST_WITH_ALGO;
-		offset += snprintf(buffer, CRYPTO_MAX_ALG_NAME + 1, "%s",
+		if(strncmp(hash_algo_name[hash_algo],"sha256",6)==0)
+			offset += snprintf(buffer, CRYPTO_MAX_ALG_NAME + 1, "sm3");
+		else{
+			offset += snprintf(buffer, CRYPTO_MAX_ALG_NAME + 1, "%s",
 				   hash_algo_name[hash_algo]);
+		}
 		buffer[offset] = ':';
 		offset += 2;
 	}

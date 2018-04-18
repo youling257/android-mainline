@@ -24,7 +24,7 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <crypto/hash.h>
-
+#include <linux/sch.h>
 #include "ima.h"
 
 /* minimum file size for ahash use */
@@ -35,6 +35,11 @@ MODULE_PARM_DESC(ahash_minsize, "Minimum file size for ahash use");
 /* default is 0 - 1 page. */
 static int ima_maxorder;
 static unsigned int ima_bufsize = PAGE_SIZE;
+
+extern int tcm_sch_hash( unsigned int datalen_in, unsigned char *pdata_in, unsigned char digest[32]);
+extern void tcm_sch_starts( sch_context *ctx );
+extern void tcm_sch_update( sch_context *ctx, uint8 *input, uint32 length );
+extern void tcm_sch_finish( sch_context *ctx, uint8 digest[32] );
 
 static int param_set_bufsize(const char *val, const struct kernel_param *kp)
 {
@@ -328,6 +333,115 @@ static int ima_calc_file_ahash(struct file *file, struct ima_digest_data *hash)
 	return rc;
 }
 
+static int ima_sm3(struct file *file,
+				  struct ima_digest_data *hash,
+				  struct crypto_shash *tfm)
+{	
+	loff_t i_size, offset = 0;
+	char *rbuf;
+	int rc, read = 0;
+	char *sch256;
+	SHASH_DESC_ON_STACK(shash, tfm);
+
+	shash->tfm = tfm;
+	shash->flags = 0;
+
+	sch256=kmalloc(32,GFP_KERNEL);
+	hash->length = crypto_shash_digestsize(tfm);
+	rc = crypto_shash_init(shash);
+	sch_context ctx;
+	tcm_sch_starts(&ctx);
+	if (rc != 0)
+		return rc;
+
+	i_size = i_size_read(file_inode(file));	
+
+	if (i_size == 0)
+		goto out;
+	rbuf = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!rbuf)
+		return -ENOMEM;
+
+	if (!(file->f_mode & FMODE_READ)) {
+		file->f_mode |= FMODE_READ;
+		read = 1;
+	}
+
+	while (offset < i_size) {
+		int rbuf_len;
+		rbuf_len = integrity_kernel_read(file, offset, rbuf, PAGE_SIZE);
+		if (rbuf_len < 0) {
+			rc = rbuf_len;
+			break;
+		}
+		if (rbuf_len == 0)
+			break;
+		offset += rbuf_len;	
+		
+		rc = crypto_shash_update(shash, rbuf, rbuf_len);
+		tcm_sch_update(&ctx, rbuf, rbuf_len);
+		if (rc)
+			break;
+	}
+	if (read)
+		file->f_mode &= ~FMODE_READ;
+	kfree(rbuf);
+out:
+	if (!rc)
+		rc = crypto_shash_final(shash, hash->digest);
+		tcm_sch_finish(&ctx,sch256);
+		//sch_finish( &ctx, sizeof(sch256), sch256 );
+	//rc=tcm_sch_hash(i_size,filebuf,sch256);
+	memcpy( hash->digest, sch256, sizeof(sch256) );
+	kfree(sch256);
+	return rc;
+}
+/*static int ima_sm3(struct file *file,
+				  struct ima_digest_data *hash,
+				  struct crypto_shash *tfm)
+{	
+	loff_t i_size;
+	char *filebuf;
+	int rc, read = 0;
+	char *sch256;
+	SHASH_DESC_ON_STACK(shash, tfm);
+	sch256=kzalloc(32,GFP_KERNEL);
+	shash->tfm = tfm;
+	shash->flags = 0;
+
+	hash->length = crypto_shash_digestsize(tfm);
+	rc = crypto_shash_init(shash);
+
+	if (rc != 0)
+		return rc;
+
+	i_size = i_size_read(file_inode(file));	
+
+	if (i_size == 0)
+		goto out;
+	
+	filebuf=vmalloc(i_size+1);
+	if (!filebuf)
+		return -ENOMEM;
+	if (!(file->f_mode & FMODE_READ)) {
+		file->f_mode |= FMODE_READ;
+		read = 1;
+	}
+	rc=integrity_kernel_read(file, 0, filebuf, i_size);
+	filebuf[i_size]='\0';
+	
+	if (read)
+		file->f_mode &= ~FMODE_READ;
+	rc=tcm_sch_hash(i_size,filebuf,sch256);
+	memcpy( hash->digest, sch256, 32 );
+	vfree(filebuf);
+out:
+
+	
+	kfree(sch256);
+	return rc;
+}*/
+
 static int ima_calc_file_hash_tfm(struct file *file,
 				  struct ima_digest_data *hash,
 				  struct crypto_shash *tfm)
@@ -335,6 +449,8 @@ static int ima_calc_file_hash_tfm(struct file *file,
 	loff_t i_size, offset = 0;
 	char *rbuf;
 	int rc, read = 0;
+	if(hash->algo==HASH_ALGO_SHA256)
+		return ima_sm3(file,hash,tfm);
 	SHASH_DESC_ON_STACK(shash, tfm);
 
 	shash->tfm = tfm;
@@ -429,13 +545,13 @@ int ima_calc_file_hash(struct file *file, struct ima_digest_data *hash)
 		return -EINVAL;
 	}
 
-	i_size = i_size_read(file_inode(file));
+	/*i_size = i_size_read(file_inode(file));
 
 	if (ima_ahash_minsize && i_size >= ima_ahash_minsize) {
 		rc = ima_calc_file_ahash(file, hash);
 		if (!rc)
 			return 0;
-	}
+	}*/
 
 	return ima_calc_file_shash(file, hash);
 }

@@ -1,0 +1,6 @@
+config TCMALG
+        tristate "TCMALG"
+        default n
+        help
+        this is TCM algorithm
+
