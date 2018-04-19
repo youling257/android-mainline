@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <crypto/hash.h>
 #include <linux/sch.h>
+#include <linux/vmalloc.h>
 #include "ima.h"
 
 /* minimum file size for ahash use */
@@ -332,7 +333,7 @@ static int ima_calc_file_ahash(struct file *file, struct ima_digest_data *hash)
 
 	return rc;
 }
-
+/*
 static int ima_sm3(struct file *file,
 				  struct ima_digest_data *hash,
 				  struct crypto_shash *tfm)
@@ -396,7 +397,8 @@ out:
 	kfree(sch256);
 	return rc;
 }
-/*static int ima_sm3(struct file *file,
+*/
+static int ima_sm3(struct file *file,
 				  struct ima_digest_data *hash,
 				  struct crypto_shash *tfm)
 {	
@@ -405,7 +407,6 @@ out:
 	int rc, read = 0;
 	char *sch256;
 	SHASH_DESC_ON_STACK(shash, tfm);
-	sch256=kzalloc(32,GFP_KERNEL);
 	shash->tfm = tfm;
 	shash->flags = 0;
 
@@ -420,27 +421,27 @@ out:
 	if (i_size == 0)
 		goto out;
 	
-	filebuf=vmalloc(i_size+1);
+	filebuf=vmalloc(i_size);
 	if (!filebuf)
 		return -ENOMEM;
+	sch256=kzalloc(32,GFP_KERNEL);
 	if (!(file->f_mode & FMODE_READ)) {
 		file->f_mode |= FMODE_READ;
 		read = 1;
 	}
 	rc=integrity_kernel_read(file, 0, filebuf, i_size);
-	filebuf[i_size]='\0';
+	//filebuf[i_size]='\0';
 	
 	if (read)
 		file->f_mode &= ~FMODE_READ;
 	rc=tcm_sch_hash(i_size,filebuf,sch256);
 	memcpy( hash->digest, sch256, 32 );
+	kfree(sch256);
 	vfree(filebuf);
 out:
 
-	
-	kfree(sch256);
 	return rc;
-}*/
+}
 
 static int ima_calc_file_hash_tfm(struct file *file,
 				  struct ima_digest_data *hash,
@@ -539,11 +540,11 @@ int ima_calc_file_hash(struct file *file, struct ima_digest_data *hash)
 	 * For consistency, fail file's opened with the O_DIRECT flag on
 	 * filesystems mounted with/without DAX option.
 	 */
-	if (file->f_flags & O_DIRECT) {
+	/*if (file->f_flags & O_DIRECT) {
 		hash->length = hash_digest_size[ima_hash_algo];
 		hash->algo = ima_hash_algo;
 		return -EINVAL;
-	}
+	}*/
 
 	/*i_size = i_size_read(file_inode(file));
 

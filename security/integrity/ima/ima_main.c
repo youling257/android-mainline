@@ -27,6 +27,8 @@
 
 #include "ima.h"
 
+//TCWG
+#include "imm_ctrl.h"
 int ima_initialized;
 
 #ifdef CONFIG_IMA_APPRAISE
@@ -178,6 +180,9 @@ static int process_measurement(struct file *file, char *buf, loff_t size,
 	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
 		return 0;
 
+	if(is_executable(file))
+	  return 0;
+	
 	/* Return an IMA_MEASURE, IMA_APPRAISE, IMA_AUDIT action
 	 * bitmask based on the appraise/audit/measurement policy.
 	 * Included is the appraise submask.

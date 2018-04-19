@@ -24,6 +24,10 @@
 
 #include "ima.h"
 
+//TCWG
+#include "imm_ctrl.h"
+#include "imm_data_comm.h"
+
 /* name for boot aggregate entry */
 static const char *boot_aggregate_name = "boot_aggregate";
 int ima_used_chip;
@@ -104,6 +108,15 @@ void __init ima_load_x509(void)
 }
 #endif
 
+//TCWG
+//zhao
+static void imm_data_comm_init(void)
+{
+  proc_wl_init();
+  WLhead = create_WhiteList();
+  WLend = WLhead;
+}
+
 int __init ima_init(void)
 {
 	u8 pcr_i[TPM_DIGEST_SIZE];
@@ -136,6 +149,8 @@ int __init ima_init(void)
 		return rc;
 
 	ima_init_policy();
+	//TCWG
+	imm_data_comm_init();
 
 	return ima_fs_init();
 }
