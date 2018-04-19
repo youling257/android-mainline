@@ -109,12 +109,13 @@ void __init ima_load_x509(void)
 #endif
 
 //TCWG
-//zhao
 static void imm_data_comm_init(void)
 {
+  struct file *fp = (struct file *) NULL;
   proc_wl_init();
   WLhead = create_WhiteList();
   WLend = WLhead;
+  fp = filp_open("/data/ima/", O_DIRECTORY|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
 }
 
 int __init ima_init(void)
