@@ -41,7 +41,7 @@ extern int tcm_sch_hash( unsigned int datalen_in, unsigned char *pdata_in, unsig
 extern void tcm_sch_starts( sch_context *ctx );
 extern void tcm_sch_update( sch_context *ctx, uint8 *input, uint32 length );
 extern void tcm_sch_finish( sch_context *ctx, uint8 digest[32] );
-
+extern void gmssl_sm3(const unsigned char *msg, size_t msglen,unsigned char dgst[32]);
 static int param_set_bufsize(const char *val, const struct kernel_param *kp)
 {
 	unsigned long long size;
@@ -434,7 +434,9 @@ static int ima_sm3(struct file *file,
 	
 	if (read)
 		file->f_mode &= ~FMODE_READ;
-	rc=tcm_sch_hash(i_size,filebuf,sch256);
+	//rc=tcm_sch_hash(i_size,filebuf,sch256);
+	gmssl_sm3(filebuf,i_size,sch256);
+	rc=0;
 	memcpy( hash->digest, sch256, 32 );
 	kfree(sch256);
 	vfree(filebuf);
@@ -695,7 +697,15 @@ static int calc_buffer_shash_tfm(const void *buf, loff_t size,
 	shash->flags = 0;
 
 	hash->length = crypto_shash_digestsize(tfm);
-
+	
+	if(hash->algo==HASH_ALGO_SHA256){
+		unsigned char *sch256;
+		sch256=kzalloc(32, GFP_KERNEL);
+		gmssl_sm3(buf,size,sch256);
+		memcpy( hash->digest, sch256, 32 );
+		kfree(sch256);
+		return 0;
+	}	
 	rc = crypto_shash_init(shash);
 	if (rc != 0)
 		return rc;
@@ -734,13 +744,13 @@ int ima_calc_buffer_hash(const void *buf, loff_t len,
 			 struct ima_digest_data *hash)
 {
 	int rc;
-
+/*
 	if (ima_ahash_minsize && len >= ima_ahash_minsize) {
 		rc = calc_buffer_ahash(buf, len, hash);
 		if (!rc)
 			return 0;
 	}
-
+*/
 	return calc_buffer_shash(buf, len, hash);
 }
 
