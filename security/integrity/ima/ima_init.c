@@ -111,14 +111,15 @@ void __init ima_load_x509(void)
 //TCWG
 static void imm_data_comm_init(void)
 {
-  struct file *fp = (struct file *) NULL;
+  //struct file *fp = (struct file *) NULL;
   proc_wl_init();
   WLhead = create_WhiteList();
   WLend = WLhead;
-  fp = filp_open("/data/ima/", O_DIRECTORY|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+  /*fp = filp_open("/data/ima/", O_DIRECTORY|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
   if(IS_ERR(fp)){
 	pr_info("Create ima directory error\n");
   }
+  */
 }
 
 int __init ima_init(void)
@@ -154,7 +155,7 @@ int __init ima_init(void)
 
 	ima_init_policy();
 	//TCWG
-//	imm_data_comm_init();
+	imm_data_comm_init();
 
 	return ima_fs_init();
 }

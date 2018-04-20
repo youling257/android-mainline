@@ -294,7 +294,7 @@ void error_log(char *hash_val, char *hash_name)
 	mutex_lock(&error_log_mutex);
 	
 	char time_temp[30];
-	fp = filp_open("/usr/error_log",O_WRONLY | O_APPEND| O_CREAT,0666);
+	fp = filp_open("/data/ima/error_log",O_WRONLY | O_APPEND| O_CREAT,0666);
 	if(IS_ERR(fp))
 	{
 		mutex_unlock(&error_log_mutex);
@@ -329,7 +329,7 @@ void set_state_OpenCtrl(void)
 	mm_segment_t fs;
 	loff_t pos;
 
-	fp = filp_open("/usr/imm_state",O_WRONLY | O_CREAT,0644);
+	fp = filp_open("/data/ima/imm_state",O_WRONLY | O_CREAT,0644);
 	if(IS_ERR(fp))
 	{
 		printk("create file error\n");
@@ -354,7 +354,7 @@ void set_state_CloseCtrl(void)
 	loff_t pos;
 	
 	//printk("Hello Enter!\n");
-	fp = filp_open("/usr/imm_state",O_WRONLY | O_CREAT,0644);
+	fp = filp_open("/data/ima/imm_state",O_WRONLY | O_CREAT,0644);
 	if(IS_ERR(fp))
 	{
 		printk("create file error\n");
@@ -379,7 +379,7 @@ void set_wl_state(atomic_t* flag)
 	loff_t pos;
 	
 	//printk("Hello Enter!\n");
-	fp = filp_open("/usr/imm_wl_exist",O_WRONLY | O_CREAT,0644);
+	fp = filp_open("/data/ima/imm_wl_exist",O_WRONLY | O_CREAT,0644);
 	if(IS_ERR(fp))
 	{
 		printk("create file error\n");
@@ -410,7 +410,7 @@ void print_kernel_whitelist_tofile(WLNode *head)
 	char HexHashStr[HASH_STRING_SIZE+1];
 	
 	//printk("Hello Enter!\n");
-	fp = filp_open("/usr/imm_wl_content",O_WRONLY | O_CREAT | O_TRUNC,0644);
+	fp = filp_open("/data/ima/imm_wl_content",O_WRONLY | O_CREAT | O_TRUNC,0644);
 	if(IS_ERR(fp))
 	{
 		printk("create file error\n");

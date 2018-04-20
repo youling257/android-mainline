@@ -26,6 +26,7 @@
 #include <crypto/hash.h>
 #include <linux/sch.h>
 #include <linux/vmalloc.h>
+#include <crypto/gmssl_sm3.h>
 #include "ima.h"
 
 /* minimum file size for ahash use */
@@ -41,7 +42,7 @@ extern int tcm_sch_hash( unsigned int datalen_in, unsigned char *pdata_in, unsig
 extern void tcm_sch_starts( sch_context *ctx );
 extern void tcm_sch_update( sch_context *ctx, uint8 *input, uint32 length );
 extern void tcm_sch_finish( sch_context *ctx, uint8 digest[32] );
-extern void gmssl_sm3(const unsigned char *msg, size_t msglen,unsigned char dgst[32]);
+//extern void gmssl_sm3(const unsigned char *msg, size_t msglen,unsigned char dgst[32]);
 static int param_set_bufsize(const char *val, const struct kernel_param *kp)
 {
 	unsigned long long size;
@@ -702,6 +703,7 @@ static int calc_buffer_shash_tfm(const void *buf, loff_t size,
 		unsigned char *sch256;
 		sch256=kzalloc(32, GFP_KERNEL);
 		gmssl_sm3(buf,size,sch256);
+		//tcm_sch_hash( size, buf, sch256);
 		memcpy( hash->digest, sch256, 32 );
 		kfree(sch256);
 		return 0;
