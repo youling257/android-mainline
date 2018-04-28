@@ -22,6 +22,8 @@
  *
  */
 
+#include <asm/iosf_mbi.h>
+
 #include "i915_drv.h"
 #include "intel_drv.h"
 
@@ -39,18 +41,48 @@
 /* Private register write, double-word addressing, non-posted */
 #define SB_CRWRDA_NP	0x07
 
-static int vlv_sideband_rw(struct drm_i915_private *dev_priv, u32 devfn,
-			   u32 port, u32 opcode, u32 addr, u32 *val)
+static void ping(void *info)
 {
-	u32 cmd, be = 0xf, bar = 0;
-	bool is_read = (opcode == SB_MRD_NP || opcode == SB_CRRDDA_NP);
+}
 
-	cmd = (devfn << IOSF_DEVFN_SHIFT) | (opcode << IOSF_OPCODE_SHIFT) |
-		(port << IOSF_PORT_SHIFT) | (be << IOSF_BYTE_ENABLES_SHIFT) |
-		(bar << IOSF_BAR_SHIFT);
+static void __vlv_punit_get(struct drm_i915_private *dev_priv)
+{
+	iosf_mbi_punit_acquire();
 
-	WARN_ON(!mutex_is_locked(&dev_priv->sb_lock));
+	/*
+	 * Prevent the cpu from sleeping while we use this sideband, otherwise
+	 * the punit may cause a machine hang. The issue appears to be isolated
+	 * with changing the power state of the CPU package while changing
+	 * the power state via the punit, and we have only observed it
+	 * reliably on 4-core Baytail systems suggesting the issue is in the
+	 * power delivery mechanism and likely to be be board/function
+	 * specific. Hence we presume the workaround needs only be applied
+	 * to the Valleyview P-unit and not all sideband communications.
+	 */
+	if (IS_VALLEYVIEW(dev_priv)) {
+		pm_qos_update_request(&dev_priv->sb_qos, 0);
+		on_each_cpu(ping, NULL, 1);
+	}
+}
 
+static void __vlv_punit_put(struct drm_i915_private *dev_priv)
+{
+	if (IS_VALLEYVIEW(dev_priv))
+		pm_qos_update_request(&dev_priv->sb_qos, PM_QOS_DEFAULT_VALUE);
+
+	iosf_mbi_punit_release();
+}
+
+static int vlv_sideband_rw(struct drm_i915_private *dev_priv,
+			   u32 devfn, u32 port, u32 opcode,
+			   u32 addr, u32 *val)
+{
+	const bool is_read = (opcode == SB_MRD_NP || opcode == SB_CRRDDA_NP);
+	int err;
+
+	lockdep_assert_held(&dev_priv->sb_lock);
+
+	/* Flush the previous comms, just in case it failed last time. */
 	if (intel_wait_for_register(dev_priv,
 				    VLV_IOSF_DOORBELL_REQ, IOSF_SB_BUSY, 0,
 				    5)) {
@@ -59,22 +91,33 @@ static int vlv_sideband_rw(struct drm_i915_private *dev_priv, u32 devfn,
 		return -EAGAIN;
 	}
 
-	I915_WRITE(VLV_IOSF_ADDR, addr);
-	I915_WRITE(VLV_IOSF_DATA, is_read ? 0 : *val);
-	I915_WRITE(VLV_IOSF_DOORBELL_REQ, cmd);
+	preempt_disable();
 
-	if (intel_wait_for_register(dev_priv,
-				    VLV_IOSF_DOORBELL_REQ, IOSF_SB_BUSY, 0,
-				    5)) {
+	I915_WRITE_FW(VLV_IOSF_ADDR, addr);
+	I915_WRITE_FW(VLV_IOSF_DATA, is_read ? 0 : *val);
+	I915_WRITE_FW(VLV_IOSF_DOORBELL_REQ,
+		      (devfn << IOSF_DEVFN_SHIFT) |
+		      (opcode << IOSF_OPCODE_SHIFT) |
+		      (port << IOSF_PORT_SHIFT) |
+		      (0xf << IOSF_BYTE_ENABLES_SHIFT) |
+		      (0 << IOSF_BAR_SHIFT) |
+		      IOSF_SB_BUSY);
+
+	if (__intel_wait_for_register_fw(dev_priv,
+					 VLV_IOSF_DOORBELL_REQ, IOSF_SB_BUSY, 0,
+					 10000, 0, NULL) == 0) {
+		if (is_read)
+			*val = I915_READ_FW(VLV_IOSF_DATA);
+		err = 0;
+	} else {
 		DRM_DEBUG_DRIVER("IOSF sideband finish wait (%s) timed out\n",
 				 is_read ? "read" : "write");
-		return -ETIMEDOUT;
+		err = -ETIMEDOUT;
 	}
 
-	if (is_read)
-		*val = I915_READ(VLV_IOSF_DATA);
+	preempt_enable();
 
-	return 0;
+	return err;
 }
 
 u32 vlv_punit_read(struct drm_i915_private *dev_priv, u32 addr)
@@ -84,8 +127,12 @@ u32 vlv_punit_read(struct drm_i915_private *dev_priv, u32 addr)
 	WARN_ON(!mutex_is_locked(&dev_priv->pcu_lock));
 
 	mutex_lock(&dev_priv->sb_lock);
+	__vlv_punit_get(dev_priv);
+
 	vlv_sideband_rw(dev_priv, PCI_DEVFN(0, 0), IOSF_PORT_PUNIT,
 			SB_CRRDDA_NP, addr, &val);
+
+	__vlv_punit_put(dev_priv);
 	mutex_unlock(&dev_priv->sb_lock);
 
 	return val;
@@ -98,8 +145,12 @@ int vlv_punit_write(struct drm_i915_private *dev_priv, u32 addr, u32 val)
 	WARN_ON(!mutex_is_locked(&dev_priv->pcu_lock));
 
 	mutex_lock(&dev_priv->sb_lock);
+	__vlv_punit_get(dev_priv);
+
 	err = vlv_sideband_rw(dev_priv, PCI_DEVFN(0, 0), IOSF_PORT_PUNIT,
 			      SB_CRWRDA_NP, addr, &val);
+
+	__vlv_punit_put(dev_priv);
 	mutex_unlock(&dev_priv->sb_lock);
 
 	return err;
