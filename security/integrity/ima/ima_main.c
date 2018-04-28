@@ -177,6 +177,8 @@ static int process_measurement(struct file *file, char *buf, loff_t size,
 	bool violation_check;
 	enum hash_algo hash_algo;
 
+	char hash_val[HASH_STRING_SIZE+1];
+
 	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
 		return 0;
 
@@ -229,11 +231,13 @@ static int process_measurement(struct file *file, char *buf, loff_t size,
 		action ^= IMA_MEASURE;
 
 	/* Nothing to do, just return existing appraised status */
+	/*TCWG, must measure
 	if (!action) {
 		if (must_appraise)
 			rc = ima_get_cache_status(iint, func);
 		goto out_digsig;
 	}
+	*/
 
 	template_desc = ima_template_desc_current();
 	if ((action & IMA_APPRAISE_SUBMASK) ||
@@ -250,6 +254,25 @@ static int process_measurement(struct file *file, char *buf, loff_t size,
 	if (!pathbuf)	/* ima_rdwr_violation possibly pre-fetched */
 		pathname = ima_d_path(&file->f_path, &pathbuf, filename);
 
+	//TCWG process control	
+	if (atomic_read(&wl_flag) == 1)
+	{
+		if(WLhead==NULL || WLhead->next==NULL){
+			return -1;		
+		}
+		if(compare_WhiteList(WLhead, iint->ima_hash->digest))
+		{
+			DecToHex(iint->ima_hash->digest, hash_val);
+			error_log(hash_val, pathname);
+
+			#ifdef IMM_NOTIFY_USERSPACE
+			//imm_notify_user_message(new_entry->file_name);
+			#endif
+			
+			return -1;
+		}
+	}
+	
 	if (action & IMA_MEASURE)
 		ima_store_measurement(iint, file, pathname,
 				      xattr_value, xattr_len, pcr);

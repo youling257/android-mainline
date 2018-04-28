@@ -93,7 +93,7 @@ static ssize_t proc_signal_write(struct file *file, const char __user *buffer,
 
         if(procfs_buffer[0]=='1')
         {
-                atomic_set(&wl_flag,0);
+                atomic_set(&wl_flag,1);
                 set_state_OpenCtrl();
         }
 
