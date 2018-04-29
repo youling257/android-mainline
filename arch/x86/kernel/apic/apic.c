@@ -624,8 +624,8 @@ static void apic_check_deadline_errata(void)
 		return;
 
 	setup_clear_cpu_cap(X86_FEATURE_TSC_DEADLINE_TIMER);
-	pr_err(FW_BUG "TSC_DEADLINE disabled due to Errata; "
-	       "please update microcode to version: 0x%x (or later)\n", rev);
+	// pr_err(FW_BUG "TSC_DEADLINE disabled due to Errata; "
+	//        "please update microcode to version: 0x%x (or later)\n", rev);
 }
 
 /*
