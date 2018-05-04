@@ -19,7 +19,7 @@
 
 #include <linux/module.h>
 #include <linux/reboot.h>
-
+#include <crypto/gmssl_sm3.h>
 #define DM_MSG_PREFIX			"verity"
 
 #define DM_VERITY_ENV_LENGTH		42
@@ -281,7 +281,14 @@ static int verity_verify_level(struct dm_verity *v, struct dm_verity_io *io,
 				verity_io_real_digest(v, io));
 		if (unlikely(r < 0))
 			goto release_ret_r;
-
+		
+		if (level == v->levels-1){
+			DMWARN("verity_verify_error: real_digest:%s, want_digest:%s",
+				verity_io_real_digest(v, io), want_digest);
+			gmssl_sm3(verity_io_real_digest(v, io), v->digest_size, verity_io_real_digest(v, io));
+			DMWARN("digest_size:%d, verity_verify_error: real_digest:%s, want_digest:%s", v->digest_size,
+				verity_io_real_digest(v, io), want_digest);
+		}
 		if (likely(memcmp(verity_io_real_digest(v, io), want_digest,
 				  v->digest_size) == 0))
 			aux->hash_verified = 1;
