@@ -1102,7 +1102,7 @@ ext4_mb_load_buddy_gfp(struct super_block *sb, ext4_group_t group,
 	int block;
 	int pnum;
 	int poff;
-	struct page *page = NULL;
+	struct page *page;
 	int ret;
 	struct ext4_group_info *grp;
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
@@ -1128,7 +1128,7 @@ ext4_mb_load_buddy_gfp(struct super_block *sb, ext4_group_t group,
 		 */
 		ret = ext4_mb_init_group(sb, group, gfp);
 		if (ret)
-			goto err;
+			return ret;
 	}
 
 	/*
@@ -1231,7 +1231,6 @@ err:
 		put_page(e4b->bd_buddy_page);
 	e4b->bd_buddy = NULL;
 	e4b->bd_bitmap = NULL;
-	ext4_warning(sb, "Error loading buddy information for %u", group);
 	return ret;
 }
 
@@ -3913,7 +3912,7 @@ ext4_mb_discard_group_preallocations(struct super_block *sb,
 	bitmap_bh = ext4_read_block_bitmap(sb, group);
 	if (IS_ERR(bitmap_bh)) {
 		err = PTR_ERR(bitmap_bh);
-		ext4_warning(sb, "Error %d reading block bitmap for %u",
+		ext4_error(sb, "Error %d reading block bitmap for %u",
 			   err, group);
 		return 0;
 	}
@@ -4081,7 +4080,7 @@ repeat:
 		err = ext4_mb_load_buddy_gfp(sb, group, &e4b,
 					     GFP_NOFS|__GFP_NOFAIL);
 		if (err) {
-			ext4_warning(sb, "Error %d loading buddy information for %u",
+			ext4_error(sb, "Error %d loading buddy information for %u",
 				   err, group);
 			continue;
 		}
@@ -4089,7 +4088,7 @@ repeat:
 		bitmap_bh = ext4_read_block_bitmap(sb, group);
 		if (IS_ERR(bitmap_bh)) {
 			err = PTR_ERR(bitmap_bh);
-			ext4_warning(sb, "Error %d reading block bitmap for %u",
+			ext4_error(sb, "Error %d reading block bitmap for %u",
 					err, group);
 			ext4_mb_unload_buddy(&e4b);
 			continue;
@@ -4344,7 +4343,7 @@ ext4_mb_discard_lg_preallocations(struct super_block *sb,
 		err = ext4_mb_load_buddy_gfp(sb, group, &e4b,
 					     GFP_NOFS|__GFP_NOFAIL);
 		if (err) {
-			ext4_warning(sb, "Error %d loading buddy information for %u",
+			ext4_error(sb, "Error %d loading buddy information for %u",
 				   err, group);
 			continue;
 		}
@@ -4876,7 +4875,7 @@ do_more:
 	err = ext4_mb_load_buddy_gfp(sb, block_group, &e4b,
 				     GFP_NOFS|__GFP_NOFAIL);
 	if (err)
-		goto error_brelse;
+		goto error_return;
 
 	/*
 	 * We need to make sure we don't reuse the freed block until after the
@@ -4958,9 +4957,8 @@ do_more:
 		goto do_more;
 	}
 error_return:
-	ext4_std_error(sb, err);
-error_brelse:
 	brelse(bitmap_bh);
+	ext4_std_error(sb, err);
 	return;
 }
 
@@ -5060,7 +5058,7 @@ int ext4_group_add_blocks(handle_t *handle, struct super_block *sb,
 
 	err = ext4_mb_load_buddy(sb, block_group, &e4b);
 	if (err)
-		goto error_brelse;
+		goto error_return;
 
 	/*
 	 * need to update group_info->bb_free and bitmap
@@ -5098,9 +5096,8 @@ int ext4_group_add_blocks(handle_t *handle, struct super_block *sb,
 		err = ret;
 
 error_return:
-	ext4_std_error(sb, err);
-error_brelse:
 	brelse(bitmap_bh);
+	ext4_std_error(sb, err);
 	return err;
 }
 
