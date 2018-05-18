@@ -270,7 +270,8 @@ BOOL tcm_ecc_is_key_match(const unsigned char *prikey, const unsigned int uPrike
 #endif
 
 #ifndef uint32
-#define uint32 unsigned long int
+//#define uint32 unsigned long int
+#define uint32 unsigned int
 #endif
 
 typedef struct
