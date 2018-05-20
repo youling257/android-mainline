@@ -321,6 +321,8 @@ static const struct silead_ts_dmi_data teclast_x5_pro_data = {
 };
 
 static const struct property_entry onda_v891w_props[] = {
+	PROPERTY_ENTRY_U32("touchscreen-min-x", 35),
+	PROPERTY_ENTRY_U32("touchscreen-min-y", 15),
 	PROPERTY_ENTRY_U32("touchscreen-size-x", 1625),
 	PROPERTY_ENTRY_U32("touchscreen-size-y", 1135),
 	PROPERTY_ENTRY_BOOL("touchscreen-inverted-y"),
