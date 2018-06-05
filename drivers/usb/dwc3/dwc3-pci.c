@@ -42,6 +42,9 @@
 #define PCI_INTEL_BXT_STATE_D0		0
 #define PCI_INTEL_BXT_STATE_D3		3
 
+#define GP_RWREG1			0xa0
+#define GP_RWREG1_ULPI_REFCLK_DISABLE	(1 << 17)
+
 /**
  * struct dwc3_pci - Driver private structure
  * @dwc3: child dwc3 platform_device
@@ -77,6 +80,34 @@ static struct gpiod_lookup_table platform_bytcr_gpios = {
 		{}
 	},
 };
+
+static void dwc3_pci_enable_ulpi_refclock(struct pci_dev *pci)
+{
+	void __iomem	*reg;
+	struct resource	res;
+	struct device	*dev = &pci->dev;
+	u32		value;
+
+	res.start	= pci_resource_start(pci, 1);
+	res.end		= pci_resource_end(pci, 1);
+	res.name	= "dwc_usb3_bar1";
+	res.flags	= IORESOURCE_MEM;
+
+	reg = devm_ioremap_resource(dev, &res);
+	if (IS_ERR(reg)) {
+		dev_err(dev, "cannot check GP_RWREG1 to assert ulpi refclock\n");
+		return;
+	}
+
+	value = readl(reg + GP_RWREG1);
+	if (!(value & GP_RWREG1_ULPI_REFCLK_DISABLE))
+		return; /* ULPI refclk already enabled */
+
+	dev_warn(dev, "ULPI refclock is disabled from the BIOS, enabling it\n");
+	value &= ~GP_RWREG1_ULPI_REFCLK_DISABLE;
+	writel(value, reg + GP_RWREG1);
+	msleep(100);
+}
 
 static int dwc3_pci_quirks(struct dwc3_pci *dwc)
 {
@@ -133,6 +164,9 @@ static int dwc3_pci_quirks(struct dwc3_pci *dwc)
 		if (pdev->device == PCI_DEVICE_ID_INTEL_BYT) {
 			struct gpio_desc *gpio;
 			const char *vendor;
+
+			/* On BYT the FW does not always enable the refclock */
+			dwc3_pci_enable_ulpi_refclock(pdev);
 
 			ret = devm_acpi_dev_add_driver_gpios(&pdev->dev,
 					acpi_dwc3_byt_gpios);
