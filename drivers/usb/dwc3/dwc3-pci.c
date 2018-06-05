@@ -8,6 +8,7 @@
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  */
 
+#include <linux/dmi.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -16,6 +17,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/platform_device.h>
 #include <linux/gpio/consumer.h>
+#include <linux/gpio/machine.h>
 #include <linux/acpi.h>
 #include <linux/delay.h>
 
@@ -54,6 +56,7 @@ struct dwc3_pci {
 	guid_t guid;
 
 	unsigned int has_dsm_for_pm:1;
+	unsigned int gpio_mapping_added:1;
 	struct work_struct wakeup_work;
 };
 
@@ -64,6 +67,15 @@ static const struct acpi_gpio_mapping acpi_dwc3_byt_gpios[] = {
 	{ "reset-gpios", &reset_gpios, 1 },
 	{ "cs-gpios", &cs_gpios, 1 },
 	{ },
+};
+
+static struct gpiod_lookup_table platform_bytcr_gpios = {
+	.dev_id		= "0000:00:16.0",
+	.table		= {
+		GPIO_LOOKUP("INT33FC:00", 54, "reset", GPIO_ACTIVE_HIGH),
+		GPIO_LOOKUP("INT33FC:02", 14, "cs", GPIO_ACTIVE_HIGH),
+		{}
+	},
 };
 
 static int dwc3_pci_quirks(struct dwc3_pci *dwc)
@@ -120,11 +132,23 @@ static int dwc3_pci_quirks(struct dwc3_pci *dwc)
 
 		if (pdev->device == PCI_DEVICE_ID_INTEL_BYT) {
 			struct gpio_desc *gpio;
+			const char *vendor;
 
 			ret = devm_acpi_dev_add_driver_gpios(&pdev->dev,
 					acpi_dwc3_byt_gpios);
 			if (ret)
 				dev_dbg(&pdev->dev, "failed to add mapping table\n");
+
+			/*
+			 * A lot of BYT devices lack ACPI resource entries for
+			 * the GPIOs, add a manual mapping on devices which use
+			 * an unmodified "INSYDE Corp." reference BIOS / design.
+			 */
+			vendor = dmi_get_system_info(DMI_BIOS_VENDOR);
+			if (vendor && strcmp(vendor, "INSYDE Corp.") == 0) {
+				gpiod_add_lookup_table(&platform_bytcr_gpios);
+				dwc->gpio_mapping_added = true;
+			}
 
 			/*
 			 * These GPIOs will turn on the USB2 PHY. Note that we have to
@@ -255,6 +279,9 @@ err:
 static void dwc3_pci_remove(struct pci_dev *pci)
 {
 	struct dwc3_pci		*dwc = pci_get_drvdata(pci);
+
+	if (dwc->gpio_mapping_added)
+		gpiod_remove_lookup_table(&platform_bytcr_gpios);
 
 #ifdef CONFIG_PM
 	cancel_work_sync(&dwc->wakeup_work);
