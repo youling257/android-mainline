@@ -90,3 +90,17 @@ SCHED_FEAT(WA_BIAS, true)
  * UtilEstimation. Use estimated CPU utilization.
  */
 SCHED_FEAT(UTIL_EST, true)
+
+/*
+ * Fast pre-selection of CPU candidates for EAS.
+ */
+SCHED_FEAT(FIND_BEST_TARGET, true)
+
+/*
+ * Energy aware scheduling algorithm choices:
+ * EAS_PREFER_IDLE
+ *   Direct tasks in a schedtune.prefer_idle=1 group through
+ *   the EAS path for wakeup task placement. Otherwise, put
+ *   those tasks through the mainline slow path.
+ */
+SCHED_FEAT(EAS_PREFER_IDLE, true)

@@ -63,6 +63,7 @@
 #include <linux/syscalls.h>
 #include <linux/task_work.h>
 #include <linux/tsacct_kern.h>
+#include <linux/energy_model.h>
 
 #include <asm/tlb.h>
 
@@ -78,6 +79,8 @@
 #else
 # define SCHED_WARN_ON(x)	({ (void)(x), 0; })
 #endif
+
+#include "tune.h"
 
 struct rq;
 struct cpuidle_state;
@@ -592,6 +595,7 @@ struct rt_rq {
 	unsigned long		rt_nr_total;
 	int			overloaded;
 	struct plist_head	pushable_tasks;
+
 #endif /* CONFIG_SMP */
 	int			rt_queued;
 
@@ -666,12 +670,37 @@ struct dl_rq {
 	u64			bw_ratio;
 };
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+/* An entity is a task if it doesn't "own" a runqueue */
+#define entity_is_task(se)	(!se->my_q)
+#else
+#define entity_is_task(se)	1
+#endif
+
 #ifdef CONFIG_SMP
+/*
+ * XXX we want to get rid of these helpers and use the full load resolution.
+ */
+static inline long se_weight(struct sched_entity *se)
+{
+	return scale_load_down(se->load.weight);
+}
+
+static inline long se_runnable(struct sched_entity *se)
+{
+	return scale_load_down(se->runnable_weight);
+}
 
 static inline bool sched_asym_prefer(int a, int b)
 {
 	return arch_asym_cpu_priority(a) > arch_asym_cpu_priority(b);
 }
+
+struct max_cpu_capacity {
+	raw_spinlock_t lock;
+	unsigned long val;
+	int cpu;
+};
 
 /*
  * We add the notion of a root-domain which will be used to define per-domain
@@ -688,8 +717,15 @@ struct root_domain {
 	cpumask_var_t		span;
 	cpumask_var_t		online;
 
-	/* Indicate more than one runnable task for any CPU */
-	bool			overload;
+	/*
+	 * Indicate pullable load on at least one CPU, e.g:
+	 * - More than one runnable task
+	 * - Running task is misfit
+	 */
+	int			overload;
+
+	/* Indicate one or more cpus over-utilized (tipping point) */
+	int			overutilized;
 
 	/*
 	 * The bit corresponding to a CPU gets set here if such CPU has more
@@ -720,7 +756,8 @@ struct root_domain {
 	cpumask_var_t		rto_mask;
 	struct cpupri		cpupri;
 
-	unsigned long		max_cpu_capacity;
+	/* Maximum cpu capacity in the system. */
+	struct max_cpu_capacity max_cpu_capacity;
 };
 
 extern struct root_domain def_root_domain;
@@ -815,6 +852,8 @@ struct rq {
 
 	unsigned char		idle_balance;
 
+	unsigned int		misfit_task_load;
+
 	/* For active balancing */
 	int			active_balance;
 	int			push_cpu;
@@ -828,6 +867,7 @@ struct rq {
 
 	u64			rt_avg;
 	u64			age_stamp;
+	struct sched_avg	avg_rt;
 	u64			idle_stamp;
 	u64			avg_idle;
 
@@ -1147,6 +1187,8 @@ DECLARE_PER_CPU(int, sd_llc_id);
 DECLARE_PER_CPU(struct sched_domain_shared *, sd_llc_shared);
 DECLARE_PER_CPU(struct sched_domain *, sd_numa);
 DECLARE_PER_CPU(struct sched_domain *, sd_asym);
+DECLARE_PER_CPU(struct sched_domain *, sd_ea);
+extern struct static_key_false sched_asym_cpucapacity;
 
 struct sched_group_capacity {
 	atomic_t		ref;
@@ -1647,6 +1689,10 @@ static inline int sched_tick_offload_init(void) { return 0; }
 static inline void sched_update_tick_dependency(struct rq *rq) { }
 #endif
 
+#ifdef CONFIG_SMP
+extern void init_max_cpu_capacity(struct max_cpu_capacity *mcc);
+#endif
+
 static inline void add_nr_running(struct rq *rq, unsigned count)
 {
 	unsigned prev_nr = rq->nr_running;
@@ -1655,8 +1701,8 @@ static inline void add_nr_running(struct rq *rq, unsigned count)
 
 	if (prev_nr < 2 && rq->nr_running >= 2) {
 #ifdef CONFIG_SMP
-		if (!rq->rd->overload)
-			rq->rd->overload = true;
+		if (!READ_ONCE(rq->rd->overload))
+			WRITE_ONCE(rq->rd->overload, 1);
 #endif
 	}
 
@@ -1721,19 +1767,17 @@ unsigned long arch_scale_freq_capacity(int cpu)
 }
 #endif
 
-#ifdef CONFIG_SMP
-extern void sched_avg_update(struct rq *rq);
-
-#ifndef arch_scale_cpu_capacity
+#ifndef arch_scale_max_freq_capacity
+struct sched_domain;
 static __always_inline
-unsigned long arch_scale_cpu_capacity(struct sched_domain *sd, int cpu)
+unsigned long arch_scale_max_freq_capacity(struct sched_domain *sd, int cpu)
 {
-	if (sd && (sd->flags & SD_SHARE_CPUCAPACITY) && (sd->span_weight > 1))
-		return sd->smt_gain / sd->span_weight;
-
 	return SCHED_CAPACITY_SCALE;
 }
 #endif
+
+#ifdef CONFIG_SMP
+extern void sched_avg_update(struct rq *rq);
 
 static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta)
 {
@@ -1741,13 +1785,6 @@ static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta)
 	sched_avg_update(rq);
 }
 #else
-#ifndef arch_scale_cpu_capacity
-static __always_inline
-unsigned long arch_scale_cpu_capacity(void __always_unused *sd, int cpu)
-{
-	return SCHED_CAPACITY_SCALE;
-}
-#endif
 static inline void sched_rt_avg_update(struct rq *rq, u64 rt_delta) { }
 static inline void sched_avg_update(struct rq *rq) { }
 #endif
@@ -2163,7 +2200,7 @@ static inline void cpufreq_update_util(struct rq *rq, unsigned int flags) {}
 # define arch_scale_freq_invariant()	false
 #endif
 
-#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL
+#ifdef CONFIG_SMP
 static inline unsigned long cpu_util_dl(struct rq *rq)
 {
 	return (rq->dl.running_bw * SCHED_CAPACITY_SCALE) >> BW_SHIFT;
@@ -2180,4 +2217,35 @@ static inline unsigned long cpu_util_cfs(struct rq *rq)
 
 	return util;
 }
+
+static inline unsigned long cpu_util_rt(struct rq *rq)
+{
+	return rq->avg_rt.util_avg;
+}
+#endif
+
+struct sched_energy_fd {
+	struct em_freq_domain *fd;
+	struct list_head next;
+	struct rcu_head rcu;
+};
+
+#ifdef CONFIG_ENERGY_MODEL
+extern struct static_key_false sched_energy_present;
+static inline bool sched_energy_enabled(void)
+{
+	return static_branch_unlikely(&sched_energy_present);
+}
+
+extern struct list_head sched_energy_fd_list;
+#define for_each_freq_domain(sfd) \
+		list_for_each_entry_rcu(sfd, &sched_energy_fd_list, next)
+#define freq_domain_span(sfd) (&((sfd)->fd->cpus))
+#else
+static inline bool sched_energy_enabled(void)
+{
+	return false;
+}
+#define for_each_freq_domain(sfd) for (sfd = NULL; sfd;)
+#define freq_domain_span(sfd) NULL
 #endif
