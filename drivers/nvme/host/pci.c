@@ -1091,8 +1091,17 @@ static int adapter_alloc_cq(struct nvme_dev *dev, u16 qid,
 static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
 						struct nvme_queue *nvmeq)
 {
+	struct nvme_ctrl *ctrl = &dev->ctrl;
 	struct nvme_command c;
 	int flags = NVME_QUEUE_PHYS_CONTIG;
+
+	/*
+	 * Some drives have a bug that auto-enables WRRU if MEDIUM isn't
+	 * set. Since URGENT priority is zeroes, it makes all queues
+	 * URGENT.
+	 */
+	if (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
+		flags |= NVME_SQ_PRIO_MEDIUM;
 
 	/*
 	 * Note: we (ab)use the fact that the prp fields survive if no data
@@ -2461,10 +2470,13 @@ static unsigned long check_vendor_combination_bug(struct pci_dev *pdev)
 	} else if (pdev->vendor == 0x144d && pdev->device == 0xa804) {
 		/*
 		 * Samsung SSD 960 EVO drops off the PCIe bus after system
-		 * suspend on a Ryzen board, ASUS PRIME B350M-A.
+		 * suspend on a Ryzen board, ASUS PRIME B350M-A, as well as
+		 * within few minutes after bootup on a Coffee Lake board -
+		 * ASUS PRIME Z370-A
 		 */
 		if (dmi_match(DMI_BOARD_VENDOR, "ASUSTeK COMPUTER INC.") &&
-		    dmi_match(DMI_BOARD_NAME, "PRIME B350M-A"))
+		    (dmi_match(DMI_BOARD_NAME, "PRIME B350M-A") ||
+		     dmi_match(DMI_BOARD_NAME, "PRIME Z370-A")))
 			return NVME_QUIRK_NO_APST;
 	}
 
@@ -2653,8 +2665,15 @@ static pci_ers_result_t nvme_slot_reset(struct pci_dev *pdev)
 
 	dev_info(dev->ctrl.device, "restart after slot reset\n");
 	pci_restore_state(pdev);
-	nvme_reset_ctrl(&dev->ctrl);
-	return PCI_ERS_RESULT_RECOVERED;
+	nvme_reset_ctrl_sync(&dev->ctrl);
+
+	switch (dev->ctrl.state) {
+	case NVME_CTRL_LIVE:
+	case NVME_CTRL_ADMIN_ONLY:
+		return PCI_ERS_RESULT_RECOVERED;
+	default:
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
 }
 
 static void nvme_error_resume(struct pci_dev *pdev)
@@ -2684,7 +2703,8 @@ static const struct pci_device_id nvme_id_table[] = {
 		.driver_data = NVME_QUIRK_STRIPE_SIZE |
 				NVME_QUIRK_DEALLOCATE_ZEROES, },
 	{ PCI_VDEVICE(INTEL, 0xf1a5),	/* Intel 600P/P3100 */
-		.driver_data = NVME_QUIRK_NO_DEEPEST_PS },
+		.driver_data = NVME_QUIRK_NO_DEEPEST_PS |
+				NVME_QUIRK_MEDIUM_PRIO_SQ },
 	{ PCI_VDEVICE(INTEL, 0x5845),	/* Qemu emulated controller */
 		.driver_data = NVME_QUIRK_IDENTIFY_CNS, },
 	{ PCI_DEVICE(0x1c58, 0x0003),	/* HGST adapter */

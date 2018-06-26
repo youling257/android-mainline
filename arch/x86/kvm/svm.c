@@ -50,7 +50,7 @@
 #include <asm/kvm_para.h>
 #include <asm/irq_remapping.h>
 #include <asm/microcode.h>
-#include <asm/nospec-branch.h>
+#include <asm/spec-ctrl.h>
 
 #include <asm/virtext.h>
 #include "trace.h"
@@ -192,6 +192,12 @@ struct vcpu_svm {
 	} host;
 
 	u64 spec_ctrl;
+	/*
+	 * Contains guest-controlled bits of VIRT_SPEC_CTRL, which will be
+	 * translated into the appropriate L2_CFG bits on the host to
+	 * perform speculative control.
+	 */
+	u64 virt_spec_ctrl;
 
 	u32 *msrpm;
 
@@ -1307,12 +1313,23 @@ static void init_sys_seg(struct vmcb_seg *seg, uint32_t type)
 	seg->base = 0;
 }
 
+static u64 svm_read_l1_tsc_offset(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	if (is_guest_mode(vcpu))
+		return svm->nested.hsave->control.tsc_offset;
+
+	return vcpu->arch.tsc_offset;
+}
+
 static void svm_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	u64 g_tsc_offset = 0;
 
 	if (is_guest_mode(vcpu)) {
+		/* Write L1's TSC offset.  */
 		g_tsc_offset = svm->vmcb->control.tsc_offset -
 			       svm->nested.hsave->control.tsc_offset;
 		svm->nested.hsave->control.tsc_offset = offset;
@@ -1910,6 +1927,7 @@ static void svm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 
 	vcpu->arch.microcode_version = 0x01000065;
 	svm->spec_ctrl = 0;
+	svm->virt_spec_ctrl = 0;
 
 	if (!init_event) {
 		svm->vcpu.arch.apic_base = APIC_DEFAULT_PHYS_BASE |
@@ -3181,6 +3199,7 @@ static int nested_svm_vmexit(struct vcpu_svm *svm)
 	/* Restore the original control entries */
 	copy_vmcb_control_area(vmcb, hsave);
 
+	svm->vcpu.arch.tsc_offset = svm->vmcb->control.tsc_offset;
 	kvm_clear_exception_queue(&svm->vcpu);
 	kvm_clear_interrupt_queue(&svm->vcpu);
 
@@ -3341,10 +3360,12 @@ static void enter_svm_guest_mode(struct vcpu_svm *svm, u64 vmcb_gpa,
 	/* We don't want to see VMMCALLs from a nested guest */
 	clr_intercept(svm, INTERCEPT_VMMCALL);
 
+	svm->vcpu.arch.tsc_offset += nested_vmcb->control.tsc_offset;
+	svm->vmcb->control.tsc_offset = svm->vcpu.arch.tsc_offset;
+
 	svm->vmcb->control.virt_ext = nested_vmcb->control.virt_ext;
 	svm->vmcb->control.int_vector = nested_vmcb->control.int_vector;
 	svm->vmcb->control.int_state = nested_vmcb->control.int_state;
-	svm->vmcb->control.tsc_offset += nested_vmcb->control.tsc_offset;
 	svm->vmcb->control.event_inj = nested_vmcb->control.event_inj;
 	svm->vmcb->control.event_inj_err = nested_vmcb->control.event_inj_err;
 
@@ -3894,12 +3915,6 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	struct vcpu_svm *svm = to_svm(vcpu);
 
 	switch (msr_info->index) {
-	case MSR_IA32_TSC: {
-		msr_info->data = svm->vmcb->control.tsc_offset +
-			kvm_scale_tsc(vcpu, rdtsc());
-
-		break;
-	}
 	case MSR_STAR:
 		msr_info->data = svm->vmcb->save.star;
 		break;
@@ -3959,10 +3974,17 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		break;
 	case MSR_IA32_SPEC_CTRL:
 		if (!msr_info->host_initiated &&
-		    !guest_cpuid_has(vcpu, X86_FEATURE_IBRS))
+		    !guest_cpuid_has(vcpu, X86_FEATURE_AMD_IBRS))
 			return 1;
 
 		msr_info->data = svm->spec_ctrl;
+		break;
+	case MSR_AMD64_VIRT_SPEC_CTRL:
+		if (!msr_info->host_initiated &&
+		    !guest_cpuid_has(vcpu, X86_FEATURE_VIRT_SSBD))
+			return 1;
+
+		msr_info->data = svm->virt_spec_ctrl;
 		break;
 	case MSR_F15H_IC_CFG: {
 
@@ -4052,12 +4074,9 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 		svm->vmcb->save.g_pat = data;
 		mark_dirty(svm->vmcb, VMCB_NPT);
 		break;
-	case MSR_IA32_TSC:
-		kvm_write_tsc(vcpu, msr);
-		break;
 	case MSR_IA32_SPEC_CTRL:
 		if (!msr->host_initiated &&
-		    !guest_cpuid_has(vcpu, X86_FEATURE_IBRS))
+		    !guest_cpuid_has(vcpu, X86_FEATURE_AMD_IBRS))
 			return 1;
 
 		/* The STIBP bit doesn't fault even if it's not advertised */
@@ -4084,7 +4103,7 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 		break;
 	case MSR_IA32_PRED_CMD:
 		if (!msr->host_initiated &&
-		    !guest_cpuid_has(vcpu, X86_FEATURE_IBPB))
+		    !guest_cpuid_has(vcpu, X86_FEATURE_AMD_IBPB))
 			return 1;
 
 		if (data & ~PRED_CMD_IBPB)
@@ -4097,6 +4116,16 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 		if (is_guest_mode(vcpu))
 			break;
 		set_msr_interception(svm->msrpm, MSR_IA32_PRED_CMD, 0, 1);
+		break;
+	case MSR_AMD64_VIRT_SPEC_CTRL:
+		if (!msr->host_initiated &&
+		    !guest_cpuid_has(vcpu, X86_FEATURE_VIRT_SSBD))
+			return 1;
+
+		if (data & ~SPEC_CTRL_SSBD)
+			return 1;
+
+		svm->virt_spec_ctrl = data;
 		break;
 	case MSR_STAR:
 		svm->vmcb->save.star = data;
@@ -5118,9 +5147,8 @@ static int svm_update_pi_irte(struct kvm *kvm, unsigned int host_irq,
 		}
 
 		if (!ret && svm) {
-			trace_kvm_pi_irte_update(svm->vcpu.vcpu_id,
-						 host_irq, e->gsi,
-						 vcpu_info.vector,
+			trace_kvm_pi_irte_update(host_irq, svm->vcpu.vcpu_id,
+						 e->gsi, vcpu_info.vector,
 						 vcpu_info.pi_desc_addr, set);
 		}
 
@@ -5401,8 +5429,7 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 	 * is no need to worry about the conditional branch over the wrmsr
 	 * being speculatively taken.
 	 */
-	if (svm->spec_ctrl)
-		native_wrmsrl(MSR_IA32_SPEC_CTRL, svm->spec_ctrl);
+	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
 
 	asm volatile (
 		"push %%" _ASM_BP "; \n\t"
@@ -5496,6 +5523,18 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 #endif
 		);
 
+	/* Eliminate branch target predictions from guest mode */
+	vmexit_fill_RSB();
+
+#ifdef CONFIG_X86_64
+	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
+#else
+	loadsegment(fs, svm->host.fs);
+#ifndef CONFIG_X86_32_LAZY_GS
+	loadsegment(gs, svm->host.gs);
+#endif
+#endif
+
 	/*
 	 * We do not use IBRS in the kernel. If this vCPU has used the
 	 * SPEC_CTRL MSR it may have left it on; save the value and
@@ -5514,20 +5553,7 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 	if (unlikely(!msr_write_intercepted(vcpu, MSR_IA32_SPEC_CTRL)))
 		svm->spec_ctrl = native_read_msr(MSR_IA32_SPEC_CTRL);
 
-	if (svm->spec_ctrl)
-		native_wrmsrl(MSR_IA32_SPEC_CTRL, 0);
-
-	/* Eliminate branch target predictions from guest mode */
-	vmexit_fill_RSB();
-
-#ifdef CONFIG_X86_64
-	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
-#else
-	loadsegment(fs, svm->host.fs);
-#ifndef CONFIG_X86_32_LAZY_GS
-	loadsegment(gs, svm->host.gs);
-#endif
-#endif
+	x86_spec_ctrl_restore_host(svm->spec_ctrl, svm->virt_spec_ctrl);
 
 	reload_tss(vcpu);
 
@@ -5630,7 +5656,7 @@ static bool svm_cpu_has_accelerated_tpr(void)
 	return false;
 }
 
-static bool svm_has_high_real_mode_segbase(void)
+static bool svm_has_emulated_msr(int index)
 {
 	return true;
 }
@@ -6854,7 +6880,7 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.hardware_enable = svm_hardware_enable,
 	.hardware_disable = svm_hardware_disable,
 	.cpu_has_accelerated_tpr = svm_cpu_has_accelerated_tpr,
-	.cpu_has_high_real_mode_segbase = svm_has_high_real_mode_segbase,
+	.has_emulated_msr = svm_has_emulated_msr,
 
 	.vcpu_create = svm_create_vcpu,
 	.vcpu_free = svm_free_vcpu,
@@ -6945,6 +6971,7 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 
 	.has_wbinvd_exit = svm_has_wbinvd_exit,
 
+	.read_l1_tsc_offset = svm_read_l1_tsc_offset,
 	.write_tsc_offset = svm_write_tsc_offset,
 
 	.set_tdp_cr3 = set_tdp_cr3,

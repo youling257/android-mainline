@@ -23,11 +23,14 @@
 #include <linux/mmu_context.h>
 #include <linux/module.h>
 #include <linux/nmi.h>
+#include <linux/nospec.h>
 #include <linux/prefetch.h>
 #include <linux/profile.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/sched/isolation.h>
+
+#include <linux/kthread.h>
 
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
@@ -2784,20 +2787,28 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 		membarrier_mm_sync_core_before_usermode(mm);
 		mmdrop(mm);
 	}
-	if (unlikely(prev_state == TASK_DEAD)) {
-		if (prev->sched_class->task_dead)
-			prev->sched_class->task_dead(prev);
+	if (unlikely(prev_state & (TASK_DEAD|TASK_PARKED))) {
+		switch (prev_state) {
+		case TASK_DEAD:
+			if (prev->sched_class->task_dead)
+				prev->sched_class->task_dead(prev);
 
-		/*
-		 * Remove function-return probe instances associated with this
-		 * task and put them back on the free list.
-		 */
-		kprobe_flush_task(prev);
+			/*
+			 * Remove function-return probe instances associated with this
+			 * task and put them back on the free list.
+			 */
+			kprobe_flush_task(prev);
 
-		/* Task is done with its stack. */
-		put_task_stack(prev);
+			/* Task is done with its stack. */
+			put_task_stack(prev);
 
-		put_task_struct(prev);
+			put_task_struct(prev);
+			break;
+
+		case TASK_PARKED:
+			kthread_park_complete(prev);
+			break;
+		}
 	}
 
 	tick_nohz_task_switch();
@@ -3511,23 +3522,8 @@ static void __sched notrace __schedule(bool preempt)
 
 void __noreturn do_task_dead(void)
 {
-	/*
-	 * The setting of TASK_RUNNING by try_to_wake_up() may be delayed
-	 * when the following two conditions become true.
-	 *   - There is race condition of mmap_sem (It is acquired by
-	 *     exit_mm()), and
-	 *   - SMI occurs before setting TASK_RUNINNG.
-	 *     (or hypervisor of virtual machine switches to other guest)
-	 *  As a result, we may become TASK_RUNNING after becoming TASK_DEAD
-	 *
-	 * To avoid it, we have to wait for releasing tsk->pi_lock which
-	 * is held by try_to_wake_up()
-	 */
-	raw_spin_lock_irq(&current->pi_lock);
-	raw_spin_unlock_irq(&current->pi_lock);
-
 	/* Causes final put_task_struct in finish_task_switch(): */
-	__set_current_state(TASK_DEAD);
+	set_special_state(TASK_DEAD);
 
 	/* Tell freezer to ignore us: */
 	current->flags |= PF_NOFREEZE;
@@ -6945,11 +6941,15 @@ static int cpu_weight_nice_write_s64(struct cgroup_subsys_state *css,
 				     struct cftype *cft, s64 nice)
 {
 	unsigned long weight;
+	int idx;
 
 	if (nice < MIN_NICE || nice > MAX_NICE)
 		return -ERANGE;
 
-	weight = sched_prio_to_weight[NICE_TO_PRIO(nice) - MAX_RT_PRIO];
+	idx = NICE_TO_PRIO(nice) - MAX_RT_PRIO;
+	idx = array_index_nospec(idx, 40);
+	weight = sched_prio_to_weight[idx];
+
 	return sched_group_set_shares(css_tg(css), scale_load(weight));
 }
 #endif

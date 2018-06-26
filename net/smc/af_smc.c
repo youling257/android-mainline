@@ -973,10 +973,6 @@ static void smc_tcp_listen_work(struct work_struct *work)
 	}
 
 out:
-	if (lsmc->clcsock) {
-		sock_release(lsmc->clcsock);
-		lsmc->clcsock = NULL;
-	}
 	release_sock(lsk);
 	sock_put(&lsmc->sk); /* sock_hold in smc_listen */
 }
@@ -1165,13 +1161,15 @@ static __poll_t smc_poll(struct file *file, struct socket *sock,
 		/* delegate to CLC child sock */
 		release_sock(sk);
 		mask = smc->clcsock->ops->poll(file, smc->clcsock, wait);
-		/* if non-blocking connect finished ... */
 		lock_sock(sk);
-		if ((sk->sk_state == SMC_INIT) && (mask & EPOLLOUT)) {
-			sk->sk_err = smc->clcsock->sk->sk_err;
-			if (sk->sk_err) {
-				mask |= EPOLLERR;
-			} else {
+		sk->sk_err = smc->clcsock->sk->sk_err;
+		if (sk->sk_err) {
+			mask |= EPOLLERR;
+		} else {
+			/* if non-blocking connect finished ... */
+			if (sk->sk_state == SMC_INIT &&
+			    mask & EPOLLOUT &&
+			    smc->clcsock->sk->sk_state != TCP_CLOSE) {
 				rc = smc_connect_rdma(smc);
 				if (rc < 0)
 					mask |= EPOLLERR;
@@ -1315,8 +1313,11 @@ static ssize_t smc_sendpage(struct socket *sock, struct page *page,
 
 	smc = smc_sk(sk);
 	lock_sock(sk);
-	if (sk->sk_state != SMC_ACTIVE)
+	if (sk->sk_state != SMC_ACTIVE) {
+		release_sock(sk);
 		goto out;
+	}
+	release_sock(sk);
 	if (smc->use_fallback)
 		rc = kernel_sendpage(smc->clcsock, page, offset,
 				     size, flags);
@@ -1324,7 +1325,6 @@ static ssize_t smc_sendpage(struct socket *sock, struct page *page,
 		rc = sock_no_sendpage(sock, page, offset, size, flags);
 
 out:
-	release_sock(sk);
 	return rc;
 }
 

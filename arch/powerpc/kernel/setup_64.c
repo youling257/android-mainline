@@ -864,6 +864,17 @@ static void init_fallback_flush(void)
 	int cpu;
 
 	l1d_size = ppc64_caches.l1d.size;
+
+	/*
+	 * If there is no d-cache-size property in the device tree, l1d_size
+	 * could be zero. That leads to the loop in the asm wrapping around to
+	 * 2^64-1, and then walking off the end of the fallback area and
+	 * eventually causing a page fault which is fatal. Just default to
+	 * something vaguely sane.
+	 */
+	if (!l1d_size)
+		l1d_size = (64 * 1024);
+
 	limit = min(ppc64_bolted_size(), ppc64_rma_size);
 
 	/*
@@ -927,12 +938,4 @@ static __init int rfi_flush_debugfs_init(void)
 }
 device_initcall(rfi_flush_debugfs_init);
 #endif
-
-ssize_t cpu_show_meltdown(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	if (rfi_flush)
-		return sprintf(buf, "Mitigation: RFI Flush\n");
-
-	return sprintf(buf, "Vulnerable\n");
-}
 #endif /* CONFIG_PPC_BOOK3S_64 */

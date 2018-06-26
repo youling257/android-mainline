@@ -99,6 +99,7 @@ static struct class *nvme_subsys_class;
 
 static void nvme_ns_remove(struct nvme_ns *ns);
 static int nvme_revalidate_disk(struct gendisk *disk);
+static void nvme_put_subsystem(struct nvme_subsystem *subsys);
 
 static __le32 nvme_get_log_dw10(u8 lid, size_t size)
 {
@@ -122,7 +123,8 @@ int nvme_reset_ctrl_sync(struct nvme_ctrl *ctrl)
 	ret = nvme_reset_ctrl(ctrl);
 	if (!ret) {
 		flush_work(&ctrl->reset_work);
-		if (ctrl->state != NVME_CTRL_LIVE)
+		if (ctrl->state != NVME_CTRL_LIVE &&
+		    ctrl->state != NVME_CTRL_ADMIN_ONLY)
 			ret = -ENETRESET;
 	}
 
@@ -352,6 +354,7 @@ static void nvme_free_ns_head(struct kref *ref)
 	ida_simple_remove(&head->subsys->ns_ida, head->instance);
 	list_del_init(&head->entry);
 	cleanup_srcu_struct(&head->srcu);
+	nvme_put_subsystem(head->subsys);
 	kfree(head);
 }
 
@@ -378,6 +381,15 @@ static void nvme_put_ns(struct nvme_ns *ns)
 	kref_put(&ns->kref, nvme_free_ns);
 }
 
+static inline void nvme_clear_nvme_request(struct request *req)
+{
+	if (!(req->rq_flags & RQF_DONTPREP)) {
+		nvme_req(req)->retries = 0;
+		nvme_req(req)->flags = 0;
+		req->rq_flags |= RQF_DONTPREP;
+	}
+}
+
 struct request *nvme_alloc_request(struct request_queue *q,
 		struct nvme_command *cmd, blk_mq_req_flags_t flags, int qid)
 {
@@ -394,6 +406,7 @@ struct request *nvme_alloc_request(struct request_queue *q,
 		return req;
 
 	req->cmd_flags |= REQ_FAILFAST_DRIVER;
+	nvme_clear_nvme_request(req);
 	nvme_req(req)->cmd = cmd;
 
 	return req;
@@ -610,11 +623,7 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 {
 	blk_status_t ret = BLK_STS_OK;
 
-	if (!(req->rq_flags & RQF_DONTPREP)) {
-		nvme_req(req)->retries = 0;
-		nvme_req(req)->flags = 0;
-		req->rq_flags |= RQF_DONTPREP;
-	}
+	nvme_clear_nvme_request(req);
 
 	switch (req_op(req)) {
 	case REQ_OP_DRV_IN:
@@ -744,6 +753,7 @@ static int nvme_submit_user_cmd(struct request_queue *q,
 		return PTR_ERR(req);
 
 	req->timeout = timeout ? timeout : ADMIN_TIMEOUT;
+	nvme_req(req)->flags |= NVME_REQ_USERCMD;
 
 	if (ubuffer && bufflen) {
 		ret = blk_rq_map_user(q, req, NULL, ubuffer, bufflen,
@@ -759,6 +769,7 @@ static int nvme_submit_user_cmd(struct request_queue *q,
 				ret = PTR_ERR(meta);
 				goto out_unmap;
 			}
+			req->cmd_flags |= REQ_INTEGRITY;
 		}
 	}
 
@@ -1438,8 +1449,8 @@ static void __nvme_revalidate_disk(struct gendisk *disk, struct nvme_id_ns *id)
 	if (ns->lba_shift == 0)
 		ns->lba_shift = 9;
 	ns->noiob = le16_to_cpu(id->noiob);
-	ns->ext = ns->ms && (id->flbas & NVME_NS_FLBAS_META_EXT);
 	ns->ms = le16_to_cpu(id->lbaf[id->flbas & NVME_NS_FLBAS_LBA_MASK].ms);
+	ns->ext = ns->ms && (id->flbas & NVME_NS_FLBAS_META_EXT);
 	/* the PI implementation requires metadata equal t10 pi tuple size */
 	if (ns->ms == sizeof(struct t10_pi_tuple))
 		ns->pi_type = id->dps & NVME_NS_DPS_PI_MASK;
@@ -2834,6 +2845,9 @@ static struct nvme_ns_head *nvme_alloc_ns_head(struct nvme_ctrl *ctrl,
 		goto out_cleanup_srcu;
 
 	list_add_tail(&head->entry, &ctrl->subsys->nsheads);
+
+	kref_get(&ctrl->subsys->ref);
+
 	return head;
 out_cleanup_srcu:
 	cleanup_srcu_struct(&head->srcu);
@@ -2970,31 +2984,7 @@ static void nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 	if (nvme_init_ns_head(ns, nsid, id))
 		goto out_free_id;
 	nvme_setup_streams_ns(ctrl, ns);
-	
-#ifdef CONFIG_NVME_MULTIPATH
-	/*
-	 * If multipathing is enabled we need to always use the subsystem
-	 * instance number for numbering our devices to avoid conflicts
-	 * between subsystems that have multiple controllers and thus use
-	 * the multipath-aware subsystem node and those that have a single
-	 * controller and use the controller node directly.
-	 */
-	if (ns->head->disk) {
-		sprintf(disk_name, "nvme%dc%dn%d", ctrl->subsys->instance,
-				ctrl->cntlid, ns->head->instance);
-		flags = GENHD_FL_HIDDEN;
-	} else {
-		sprintf(disk_name, "nvme%dn%d", ctrl->subsys->instance,
-				ns->head->instance);
-	}
-#else
-	/*
-	 * But without the multipath code enabled, multiple controller per
-	 * subsystems are visible as devices and thus we cannot use the
-	 * subsystem instance.
-	 */
-	sprintf(disk_name, "nvme%dn%d", ctrl->instance, ns->head->instance);
-#endif
+	nvme_set_disk_name(disk_name, ns, ctrl, &flags);
 
 	if ((ctrl->quirks & NVME_QUIRK_LIGHTNVM) && id->vs[0] == 0x1) {
 		if (nvme_nvm_register(ns, disk_name, node)) {
