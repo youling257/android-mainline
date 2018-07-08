@@ -43,6 +43,11 @@ struct em_data_callback {
 	int (*active_power) (unsigned long *power, unsigned long *freq, int cpu);
 };
 
+#define EM_DATA_CB(_active_power_cb) \
+	{ \
+		.active_power = &_active_power_cb \
+	}
+
 int em_register_freq_domain(cpumask_t *span, unsigned int nr_states,
 						struct em_data_callback *cb);
 void em_rescale_cpu_capacity(void);
@@ -97,8 +102,10 @@ static inline int em_fd_nr_cap_states(struct em_freq_domain *fd)
 }
 
 #else
-struct em_freq_domain;
-struct em_data_callback;
+struct em_freq_domain {};
+struct em_data_callback {};
+#define EM_DATA_CB(_active_power_cb) { }
+
 static inline int em_register_freq_domain(cpumask_t *span,
 			unsigned int nr_states, struct em_data_callback *cb)
 {

@@ -104,7 +104,7 @@ static int scpi_cpufreq_init(struct cpufreq_policy *policy)
 	struct device *cpu_dev;
 	struct scpi_data *priv;
 	struct cpufreq_frequency_table *freq_table;
-	struct em_data_callback em_cb = { &dev_pm_opp_of_estimate_power };
+	struct em_data_callback em_cb = EM_DATA_CB(dev_pm_opp_of_estimate_power);
 
 	cpu_dev = get_cpu_device(policy->cpu);
 	if (!cpu_dev) {

@@ -161,7 +161,7 @@ static int cpufreq_init(struct cpufreq_policy *policy)
 	bool fallback = false;
 	const char *name;
 	int ret, nr_opp;
-	struct em_data_callback em_cb = { &dev_pm_opp_of_estimate_power };
+	struct em_data_callback em_cb = EM_DATA_CB(dev_pm_opp_of_estimate_power);
 
 
 	cpu_dev = get_cpu_device(policy->cpu);
