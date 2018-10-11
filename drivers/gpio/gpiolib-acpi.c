@@ -312,6 +312,10 @@ static acpi_status acpi_gpiochip_request_interrupt(struct acpi_resource *ares,
 	 * may refer to OperationRegions from other (builtin) drivers which
 	 * may be probed after us.
 	 */
+	if (handler == acpi_gpio_irq_handler &&
+	    (((irqflags & IRQF_TRIGGER_RISING) && value == 1) ||
+	     ((irqflags & IRQF_TRIGGER_FALLING) && value == 0)))
+		acpi_gpio_add_to_initial_sync_list(event);
 
 	return AE_OK;
 
