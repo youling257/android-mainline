@@ -807,6 +807,7 @@ struct dwc3_scratchpad_array {
  * @usb3_generic_phy: pointer to USB3 PHY
  * @phys_ready: flag to indicate that PHYs are ready
  * @ulpi: pointer to ulpi interface
+ * @ulpi_ready: flag to indicate that ULPI is initialized
  * @isoch_delay: wValue from Set Isochronous Delay request;
  * @ulpi_ready: flag to indicate that ULPI is initialized
  * @u2sel: parameter from Set SEL request.
