@@ -1966,7 +1966,7 @@ alloc_channel(struct dpaa2_eth_priv *priv)
 
 	channel->dpcon = setup_dpcon(priv);
 	if (IS_ERR_OR_NULL(channel->dpcon)) {
-		err = PTR_ERR(channel->dpcon);
+		err = PTR_ERR_OR_ZERO(channel->dpcon);
 		goto err_setup;
 	}
 
@@ -2022,7 +2022,7 @@ static int setup_dpio(struct dpaa2_eth_priv *priv)
 		/* Try to allocate a channel */
 		channel = alloc_channel(priv);
 		if (IS_ERR_OR_NULL(channel)) {
-			err = PTR_ERR(channel);
+			err = PTR_ERR_OR_ZERO(channel);
 			if (err != -EPROBE_DEFER)
 				dev_info(dev,
 					 "No affine channel for cpu %d and above\n", i);
@@ -2796,6 +2796,7 @@ int dpaa2_eth_set_hash(struct net_device *net_dev, u64 flags)
 static int dpaa2_eth_set_cls(struct dpaa2_eth_priv *priv)
 {
 	struct device *dev = priv->net_dev->dev.parent;
+	int err;
 
 	/* Check if we actually support Rx flow classification */
 	if (dpaa2_eth_has_legacy_dist(priv)) {
@@ -2814,9 +2815,13 @@ static int dpaa2_eth_set_cls(struct dpaa2_eth_priv *priv)
 		return -EOPNOTSUPP;
 	}
 
+	err = dpaa2_eth_set_dist_key(priv->net_dev, DPAA2_ETH_RX_DIST_CLS, 0);
+	if (err)
+		return err;
+
 	priv->rx_cls_enabled = 1;
 
-	return dpaa2_eth_set_dist_key(priv->net_dev, DPAA2_ETH_RX_DIST_CLS, 0);
+	return 0;
 }
 
 /* Bind the DPNI to its needed objects and resources: buffer pool, DPIOs,

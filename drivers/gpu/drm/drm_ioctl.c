@@ -508,13 +508,6 @@ int drm_version(struct drm_device *dev, void *data,
 	return err;
 }
 
-static inline bool
-drm_render_driver_and_ioctl(const struct drm_device *dev, u32 flags)
-{
-	return drm_core_check_feature(dev, DRIVER_RENDER) &&
-		(flags & DRM_RENDER_ALLOW);
-}
-
 /**
  * drm_ioctl_permit - Check ioctl permissions against caller
  *

@@ -533,6 +533,7 @@ static struct io_kiocb *io_get_req(struct io_ring_ctx *ctx,
 		state->cur_req++;
 	}
 
+	req->file = NULL;
 	req->ctx = ctx;
 	req->flags = 0;
 	/* one is dropped after submission, the other at completion */
@@ -1684,10 +1685,8 @@ static int io_req_set_file(struct io_ring_ctx *ctx, const struct sqe_submit *s,
 	flags = READ_ONCE(s->sqe->flags);
 	fd = READ_ONCE(s->sqe->fd);
 
-	if (!io_op_needs_file(s->sqe)) {
-		req->file = NULL;
+	if (!io_op_needs_file(s->sqe))
 		return 0;
-	}
 
 	if (flags & IOSQE_FIXED_FILE) {
 		if (unlikely(!ctx->user_files ||
@@ -2097,7 +2096,7 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events,
 	finish_wait(&ctx->wait, &wait);
 
 	if (sig)
-		restore_user_sigmask(sig, &sigsaved);
+		restore_user_sigmask(sig, &sigsaved, ret == -EINTR);
 
 	return READ_ONCE(ring->r.head) == READ_ONCE(ring->r.tail) ? ret : 0;
 }
@@ -2330,11 +2329,12 @@ static int io_sq_offload_start(struct io_ring_ctx *ctx,
 			ctx->sq_thread_idle = HZ;
 
 		if (p->flags & IORING_SETUP_SQ_AFF) {
-			int cpu = array_index_nospec(p->sq_thread_cpu,
-							nr_cpu_ids);
+			int cpu = p->sq_thread_cpu;
 
 			ret = -EINVAL;
-			if (!cpu_possible(cpu))
+			if (cpu >= nr_cpu_ids)
+				goto err;
+			if (!cpu_online(cpu))
 				goto err;
 
 			ctx->sqo_thread = kthread_create_on_cpu(io_sq_thread,
@@ -2505,7 +2505,7 @@ static int io_sqe_buffer_register(struct io_ring_ctx *ctx, void __user *arg,
 
 		ret = io_copy_iov(ctx, &iov, arg, i);
 		if (ret)
-			break;
+			goto err;
 
 		/*
 		 * Don't impose further limits on the size and buffer
@@ -2632,8 +2632,10 @@ static void io_ring_ctx_free(struct io_ring_ctx *ctx)
 	io_sqe_files_unregister(ctx);
 
 #if defined(CONFIG_UNIX)
-	if (ctx->ring_sock)
+	if (ctx->ring_sock) {
+		ctx->ring_sock->file = NULL; /* so that iput() is called */
 		sock_release(ctx->ring_sock);
+	}
 #endif
 
 	io_mem_free(ctx->sq_ring);

@@ -1561,7 +1561,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CVLAN)) {
 		struct flow_match_vlan match;
 
-		flow_rule_match_vlan(rule, &match);
+		flow_rule_match_cvlan(rule, &match);
 		if (match.mask->vlan_id ||
 		    match.mask->vlan_priority ||
 		    match.mask->vlan_tpid) {
@@ -2571,9 +2571,6 @@ static int parse_tc_fdb_actions(struct mlx5e_priv *priv,
 
 	if (!flow_action_has_entries(flow_action))
 		return -EINVAL;
-
-	attr->in_rep = rpriv->rep;
-	attr->in_mdev = priv->mdev;
 
 	flow_action_for_each(i, act, flow_action) {
 		switch (act->id) {

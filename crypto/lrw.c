@@ -162,8 +162,10 @@ static int xor_tweak(struct skcipher_request *req, bool second_pass)
 	}
 
 	err = skcipher_walk_virt(&w, req, false);
-	iv = (__be32 *)w.iv;
+	if (err)
+		return err;
 
+	iv = (__be32 *)w.iv;
 	counter[0] = be32_to_cpu(iv[3]);
 	counter[1] = be32_to_cpu(iv[2]);
 	counter[2] = be32_to_cpu(iv[1]);
@@ -386,7 +388,7 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 	inst->alg.base.cra_priority = alg->base.cra_priority;
 	inst->alg.base.cra_blocksize = LRW_BLOCK_SIZE;
 	inst->alg.base.cra_alignmask = alg->base.cra_alignmask |
-				       (__alignof__(__be32) - 1);
+				       (__alignof__(be128) - 1);
 
 	inst->alg.ivsize = LRW_BLOCK_SIZE;
 	inst->alg.min_keysize = crypto_skcipher_alg_min_keysize(alg) +
