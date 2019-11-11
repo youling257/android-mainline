@@ -1017,7 +1017,7 @@ static int sctp_setsockopt_bindx(struct sock *sk,
 	if (unlikely(addrs_size <= 0))
 		return -EINVAL;
 
-	kaddrs = vmemdup_user(addrs, addrs_size);
+	kaddrs = memdup_user(addrs, addrs_size);
 	if (unlikely(IS_ERR(kaddrs)))
 		return PTR_ERR(kaddrs);
 
@@ -1025,7 +1025,7 @@ static int sctp_setsockopt_bindx(struct sock *sk,
 	addr_buf = kaddrs;
 	while (walk_size < addrs_size) {
 		if (walk_size + sizeof(sa_family_t) > addrs_size) {
-			kvfree(kaddrs);
+			kfree(kaddrs);
 			return -EINVAL;
 		}
 
@@ -1036,7 +1036,7 @@ static int sctp_setsockopt_bindx(struct sock *sk,
 		 * causes the address buffer to overflow return EINVAL.
 		 */
 		if (!af || (walk_size + af->sockaddr_len) > addrs_size) {
-			kvfree(kaddrs);
+			kfree(kaddrs);
 			return -EINVAL;
 		}
 		addrcnt++;
@@ -1072,7 +1072,7 @@ static int sctp_setsockopt_bindx(struct sock *sk,
 	}
 
 out:
-	kvfree(kaddrs);
+	kfree(kaddrs);
 
 	return err;
 }
@@ -1347,7 +1347,7 @@ static int __sctp_setsockopt_connectx(struct sock *sk,
 	if (unlikely(addrs_size <= 0))
 		return -EINVAL;
 
-	kaddrs = vmemdup_user(addrs, addrs_size);
+	kaddrs = memdup_user(addrs, addrs_size);
 	if (unlikely(IS_ERR(kaddrs)))
 		return PTR_ERR(kaddrs);
 
@@ -1367,7 +1367,7 @@ static int __sctp_setsockopt_connectx(struct sock *sk,
 	err = __sctp_connect(sk, kaddrs, addrs_size, flags, assoc_id);
 
 out_free:
-	kvfree(kaddrs);
+	kfree(kaddrs);
 
 	return err;
 }
@@ -1884,6 +1884,7 @@ static int sctp_sendmsg_check_sflags(struct sctp_association *asoc,
 
 		pr_debug("%s: aborting association:%p\n", __func__, asoc);
 		sctp_primitive_ABORT(net, asoc, chunk);
+		iov_iter_revert(&msg->msg_iter, msg_len);
 
 		return 0;
 	}
@@ -2045,7 +2046,7 @@ static int sctp_sendmsg(struct sock *sk, struct msghdr *msg, size_t msg_len)
 	struct sctp_endpoint *ep = sctp_sk(sk)->ep;
 	struct sctp_transport *transport = NULL;
 	struct sctp_sndrcvinfo _sinfo, *sinfo;
-	struct sctp_association *asoc;
+	struct sctp_association *asoc, *tmp;
 	struct sctp_cmsgs cmsgs;
 	union sctp_addr *daddr;
 	bool new = false;
@@ -2071,7 +2072,7 @@ static int sctp_sendmsg(struct sock *sk, struct msghdr *msg, size_t msg_len)
 
 	/* SCTP_SENDALL process */
 	if ((sflags & SCTP_SENDALL) && sctp_style(sk, UDP)) {
-		list_for_each_entry(asoc, &ep->asocs, asocs) {
+		list_for_each_entry_safe(asoc, tmp, &ep->asocs, asocs) {
 			err = sctp_sendmsg_check_sflags(asoc, sflags, msg,
 							msg_len);
 			if (err == 0)
@@ -4506,34 +4507,18 @@ out_nounlock:
 static int sctp_connect(struct sock *sk, struct sockaddr *addr,
 			int addr_len, int flags)
 {
-	struct inet_sock *inet = inet_sk(sk);
 	struct sctp_af *af;
-	int err = 0;
+	int err = -EINVAL;
 
 	lock_sock(sk);
 
 	pr_debug("%s: sk:%p, sockaddr:%p, addr_len:%d\n", __func__, sk,
 		 addr, addr_len);
 
-	/* We may need to bind the socket. */
-	if (!inet->inet_num) {
-		if (sk->sk_prot->get_port(sk, 0)) {
-			release_sock(sk);
-			return -EAGAIN;
-		}
-		inet->inet_sport = htons(inet->inet_num);
-	}
-
 	/* Validate addr_len before calling common connect/connectx routine. */
 	af = sctp_get_af_specific(addr->sa_family);
-	if (!af || addr_len < af->sockaddr_len) {
-		err = -EINVAL;
-	} else {
-		/* Pass correct addr len to common routine (so it knows there
-		 * is only one address being passed.
-		 */
+	if (af && addr_len >= af->sockaddr_len)
 		err = __sctp_connect(sk, addr, af->sockaddr_len, flags, NULL);
-	}
 
 	release_sock(sk);
 	return err;
@@ -7954,7 +7939,7 @@ __poll_t sctp_poll(struct file *file, struct socket *sock, poll_table *wait)
 	mask = 0;
 
 	/* Is there any exceptional events?  */
-	if (sk->sk_err || !skb_queue_empty(&sk->sk_error_queue))
+	if (sk->sk_err || !skb_queue_empty_lockless(&sk->sk_error_queue))
 		mask |= EPOLLERR |
 			(sock_flag(sk, SOCK_SELECT_ERR_QUEUE) ? EPOLLPRI : 0);
 	if (sk->sk_shutdown & RCV_SHUTDOWN)
@@ -7963,7 +7948,7 @@ __poll_t sctp_poll(struct file *file, struct socket *sock, poll_table *wait)
 		mask |= EPOLLHUP;
 
 	/* Is it readable?  Reconsider this code with TCP-style support.  */
-	if (!skb_queue_empty(&sk->sk_receive_queue))
+	if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
 		mask |= EPOLLIN | EPOLLRDNORM;
 
 	/* The association is either gone or not ready.  */
@@ -8349,7 +8334,7 @@ struct sk_buff *sctp_skb_recv_datagram(struct sock *sk, int flags,
 		if (sk_can_busy_loop(sk)) {
 			sk_busy_loop(sk, noblock);
 
-			if (!skb_queue_empty(&sk->sk_receive_queue))
+			if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
 				continue;
 		}
 
@@ -8792,7 +8777,7 @@ void sctp_copy_sock(struct sock *newsk, struct sock *sk,
 	newinet->inet_rcv_saddr = inet->inet_rcv_saddr;
 	newinet->inet_dport = htons(asoc->peer.port);
 	newinet->pmtudisc = inet->pmtudisc;
-	newinet->inet_id = asoc->next_tsn ^ jiffies;
+	newinet->inet_id = prandom_u32();
 
 	newinet->uc_ttl = inet->uc_ttl;
 	newinet->mc_loop = 1;
@@ -8972,7 +8957,7 @@ struct proto sctp_prot = {
 	.backlog_rcv =	sctp_backlog_rcv,
 	.hash        =	sctp_hash,
 	.unhash      =	sctp_unhash,
-	.get_port    =	sctp_get_port,
+	.no_autobind =	true,
 	.obj_size    =  sizeof(struct sctp_sock),
 	.useroffset  =  offsetof(struct sctp_sock, subscribe),
 	.usersize    =  offsetof(struct sctp_sock, initmsg) -
@@ -9014,7 +8999,7 @@ struct proto sctpv6_prot = {
 	.backlog_rcv	= sctp_backlog_rcv,
 	.hash		= sctp_hash,
 	.unhash		= sctp_unhash,
-	.get_port	= sctp_get_port,
+	.no_autobind	= true,
 	.obj_size	= sizeof(struct sctp6_sock),
 	.useroffset	= offsetof(struct sctp6_sock, sctp.subscribe),
 	.usersize	= offsetof(struct sctp6_sock, sctp.initmsg) -

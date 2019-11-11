@@ -243,6 +243,9 @@ enum mddev_flags {
 	MD_UPDATING_SB,		/* md_check_recovery is updating the metadata
 				 * without explicitly holding reconfig_mutex.
 				 */
+	MD_NOT_READY,		/* do_md_run() is active, so 'array_state'
+				 * must not report that array is ready yet
+				 */
 };
 
 enum mddev_sb_flags {
@@ -250,19 +253,6 @@ enum mddev_sb_flags {
 	MD_SB_CHANGE_CLEAN,	/* transition to or from 'clean' */
 	MD_SB_CHANGE_PENDING,	/* switch from 'clean' to 'active' in progress */
 	MD_SB_NEED_REWRITE,	/* metadata write needs to be repeated */
-};
-
-#define NR_FLUSH_INFOS 8
-#define NR_FLUSH_BIOS 64
-struct flush_info {
-	struct bio			*bio;
-	struct mddev			*mddev;
-	struct work_struct		flush_work;
-	atomic_t			flush_pending;
-};
-struct flush_bio {
-	struct flush_info *fi;
-	struct md_rdev *rdev;
 };
 
 struct mddev {
@@ -470,8 +460,16 @@ struct mddev {
 						   * metadata and bitmap writes
 						   */
 
-	mempool_t			*flush_pool;
-	mempool_t			*flush_bio_pool;
+	/* Generic flush handling.
+	 * The last to finish preflush schedules a worker to submit
+	 * the rest of the request (without the REQ_PREFLUSH flag).
+	 */
+	struct bio *flush_bio;
+	atomic_t flush_pending;
+	ktime_t start_flush, last_flush; /* last_flush is when the last completed
+					  * flush was started.
+					  */
+	struct work_struct flush_work;
 	struct work_struct event_work;	/* used by dm to report failure event */
 	void (*sync_super)(struct mddev *mddev, struct md_rdev *rdev);
 	struct md_cluster_info		*cluster_info;

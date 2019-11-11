@@ -32,7 +32,7 @@
  * macros. Do **not** mass change existing definitions just to update the style.
  *
  * Layout
- * ''''''
+ * ~~~~~~
  *
  * Keep helper macros near the top. For example, _PIPE() and friends.
  *
@@ -78,7 +78,7 @@
  * style. Use lower case in hexadecimal values.
  *
  * Naming
- * ''''''
+ * ~~~~~~
  *
  * Try to name registers according to the specs. If the register name changes in
  * the specs from platform to another, stick to the original name.
@@ -96,7 +96,7 @@
  * suffix to the name. For example, ``_SKL`` or ``_GEN8``.
  *
  * Examples
- * ''''''''
+ * ~~~~~~~~
  *
  * (Note that the values in the example are indented using spaces instead of
  * TABs to avoid misalignment in generated documentation. Use TABs in the
@@ -6534,7 +6534,7 @@ enum {
 #define   PLANE_CTL_YUV422_UYVY			(1 << 16)
 #define   PLANE_CTL_YUV422_YVYU			(2 << 16)
 #define   PLANE_CTL_YUV422_VYUY			(3 << 16)
-#define   PLANE_CTL_DECOMPRESSION_ENABLE	(1 << 15)
+#define   PLANE_CTL_RENDER_DECOMPRESSION_ENABLE	(1 << 15)
 #define   PLANE_CTL_TRICKLE_FEED_DISABLE	(1 << 14)
 #define   PLANE_CTL_PLANE_GAMMA_DISABLE		(1 << 13) /* Pre-GLK */
 #define   PLANE_CTL_TILED_MASK			(0x7 << 10)

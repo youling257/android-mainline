@@ -148,6 +148,7 @@ struct nvme_ctrl {
 	enum nvme_ctrl_state state;
 	bool identified;
 	spinlock_t lock;
+	struct mutex scan_lock;
 	const struct nvme_ctrl_ops *ops;
 	struct request_queue *admin_q;
 	struct request_queue *connect_q;
@@ -463,7 +464,14 @@ extern const struct attribute_group nvme_ns_id_attr_group;
 extern const struct block_device_operations nvme_ns_head_ops;
 
 #ifdef CONFIG_NVME_MULTIPATH
-bool nvme_ctrl_use_ana(struct nvme_ctrl *ctrl);
+static inline bool nvme_ctrl_use_ana(struct nvme_ctrl *ctrl)
+{
+	return ctrl->ana_log_buf != NULL;
+}
+
+void nvme_mpath_unfreeze(struct nvme_subsystem *subsys);
+void nvme_mpath_wait_freeze(struct nvme_subsystem *subsys);
+void nvme_mpath_start_freeze(struct nvme_subsystem *subsys);
 void nvme_set_disk_name(char *disk_name, struct nvme_ns *ns,
 			struct nvme_ctrl *ctrl, int *flags);
 void nvme_failover_req(struct request *req);
@@ -546,6 +554,15 @@ static inline void nvme_mpath_uninit(struct nvme_ctrl *ctrl)
 {
 }
 static inline void nvme_mpath_stop(struct nvme_ctrl *ctrl)
+{
+}
+static inline void nvme_mpath_unfreeze(struct nvme_subsystem *subsys)
+{
+}
+static inline void nvme_mpath_wait_freeze(struct nvme_subsystem *subsys)
+{
+}
+static inline void nvme_mpath_start_freeze(struct nvme_subsystem *subsys)
 {
 }
 #endif /* CONFIG_NVME_MULTIPATH */
