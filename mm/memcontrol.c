@@ -486,7 +486,7 @@ ino_t page_cgroup_ino(struct page *page)
 	unsigned long ino = 0;
 
 	rcu_read_lock();
-	if (PageHead(page) && PageSlab(page))
+	if (PageSlab(page) && !PageTail(page))
 		memcg = memcg_from_slab_page(page);
 	else
 		memcg = READ_ONCE(page->mem_cgroup);
@@ -962,7 +962,7 @@ struct mem_cgroup *get_mem_cgroup_from_mm(struct mm_struct *mm)
 			if (unlikely(!memcg))
 				memcg = root_mem_cgroup;
 		}
-	} while (!css_tryget_online(&memcg->css));
+	} while (!css_tryget(&memcg->css));
 	rcu_read_unlock();
 	return memcg;
 }
@@ -2408,6 +2408,15 @@ retry:
 	}
 
 	/*
+	 * Memcg doesn't have a dedicated reserve for atomic
+	 * allocations. But like the global atomic pool, we need to
+	 * put the burden of reclaim on regular allocation requests
+	 * and let these go through as privileged allocations.
+	 */
+	if (gfp_mask & __GFP_ATOMIC)
+		goto force;
+
+	/*
 	 * Unlike in global OOM situations, memcg is not in a physical
 	 * memory shortage.  Allow dying and OOM-killed tasks to
 	 * bypass the last charges so that they can exit quickly and
@@ -2821,6 +2830,16 @@ int __memcg_kmem_charge_memcg(struct page *page, gfp_t gfp, int order,
 
 	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys) &&
 	    !page_counter_try_charge(&memcg->kmem, nr_pages, &counter)) {
+
+		/*
+		 * Enforce __GFP_NOFAIL allocation because callers are not
+		 * prepared to see failures and likely do not have any failure
+		 * handling code.
+		 */
+		if (gfp & __GFP_NOFAIL) {
+			page_counter_charge(&memcg->kmem, nr_pages);
+			return 0;
+		}
 		cancel_charge(memcg, nr_pages);
 		return -ENOMEM;
 	}
@@ -4753,12 +4772,6 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 {
 	int node;
 
-	/*
-	 * Flush percpu vmstats and vmevents to guarantee the value correctness
-	 * on parent's and all ancestor levels.
-	 */
-	memcg_flush_percpu_vmstats(memcg, false);
-	memcg_flush_percpu_vmevents(memcg);
 	for_each_node(node)
 		free_mem_cgroup_per_node_info(memcg, node);
 	free_percpu(memcg->vmstats_percpu);
@@ -4769,6 +4782,12 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 static void mem_cgroup_free(struct mem_cgroup *memcg)
 {
 	memcg_wb_domain_exit(memcg);
+	/*
+	 * Flush percpu vmstats and vmevents to guarantee the value correctness
+	 * on parent's and all ancestor levels.
+	 */
+	memcg_flush_percpu_vmstats(memcg, false);
+	memcg_flush_percpu_vmevents(memcg);
 	__mem_cgroup_free(memcg);
 }
 

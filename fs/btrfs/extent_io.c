@@ -3745,10 +3745,19 @@ err_unlock:
 static void set_btree_ioerr(struct page *page)
 {
 	struct extent_buffer *eb = (struct extent_buffer *)page->private;
+	struct btrfs_fs_info *fs_info;
 
 	SetPageError(page);
 	if (test_and_set_bit(EXTENT_BUFFER_WRITE_ERR, &eb->bflags))
 		return;
+
+	/*
+	 * If we error out, we should add back the dirty_metadata_bytes
+	 * to make it consistent.
+	 */
+	fs_info = eb->fs_info;
+	percpu_counter_add_batch(&fs_info->dirty_metadata_bytes,
+				 eb->len, fs_info->dirty_metadata_batch);
 
 	/*
 	 * If writeback for a btree extent that doesn't belong to a log tree
@@ -4108,7 +4117,7 @@ retry:
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 
-			done_index = page->index;
+			done_index = page->index + 1;
 			/*
 			 * At this point we hold neither the i_pages lock nor
 			 * the page lock: the page may be truncated or
@@ -4143,16 +4152,6 @@ retry:
 
 			ret = __extent_writepage(page, wbc, epd);
 			if (ret < 0) {
-				/*
-				 * done_index is set past this page,
-				 * so media errors will not choke
-				 * background writeout for the entire
-				 * file. This has consequences for
-				 * range_cyclic semantics (ie. it may
-				 * not be suitable for data integrity
-				 * writeout).
-				 */
-				done_index = page->index + 1;
 				done = 1;
 				break;
 			}

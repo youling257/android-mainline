@@ -721,6 +721,17 @@ static int virtballoon_migratepage(struct balloon_dev_info *vb_dev_info,
 
 	get_page(newpage); /* balloon reference */
 
+	/*
+	  * When we migrate a page to a different zone and adjusted the
+	  * managed page count when inflating, we have to fixup the count of
+	  * both involved zones.
+	  */
+	if (!virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_DEFLATE_ON_OOM) &&
+	    page_zone(page) != page_zone(newpage)) {
+		adjust_managed_page_count(page, 1);
+		adjust_managed_page_count(newpage, -1);
+	}
+
 	/* balloon's page migration 1st step  -- inflate "newpage" */
 	spin_lock_irqsave(&vb_dev_info->pages_lock, flags);
 	balloon_page_insert(vb_dev_info, newpage);
@@ -820,7 +831,7 @@ static unsigned long virtio_balloon_shrinker_count(struct shrinker *shrinker,
 	unsigned long count;
 
 	count = vb->num_pages / VIRTIO_BALLOON_PAGES_PER_PAGE;
-	count += vb->num_free_page_blocks >> VIRTIO_BALLOON_FREE_PAGE_ORDER;
+	count += vb->num_free_page_blocks << VIRTIO_BALLOON_FREE_PAGE_ORDER;
 
 	return count;
 }

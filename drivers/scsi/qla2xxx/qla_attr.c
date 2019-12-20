@@ -441,9 +441,6 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		valid = 0;
 		if (ha->optrom_size == OPTROM_SIZE_2300 && start == 0)
 			valid = 1;
-		else if (start == (ha->flt_region_boot * 4) ||
-		    start == (ha->flt_region_fw * 4))
-			valid = 1;
 		else if (IS_QLA24XX_TYPE(ha) || IS_QLA25XX(ha))
 			valid = 1;
 		if (!valid) {
@@ -491,8 +488,10 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		    "Writing flash region -- 0x%x/0x%x.\n",
 		    ha->optrom_region_start, ha->optrom_region_size);
 
-		ha->isp_ops->write_optrom(vha, ha->optrom_buffer,
+		rval = ha->isp_ops->write_optrom(vha, ha->optrom_buffer,
 		    ha->optrom_region_start, ha->optrom_region_size);
+		if (rval)
+			rval = -EIO;
 		break;
 	default:
 		rval = -EINVAL;
@@ -726,7 +725,8 @@ qla2x00_sysfs_write_reset(struct file *filp, struct kobject *kobj,
 			break;
 		} else {
 			/* Make sure FC side is not in reset */
-			qla2x00_wait_for_hba_online(vha);
+			WARN_ON_ONCE(qla2x00_wait_for_hba_online(vha) !=
+				     QLA_SUCCESS);
 
 			/* Issue MPI reset */
 			scsi_block_requests(vha->host);

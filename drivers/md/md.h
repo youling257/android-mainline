@@ -248,6 +248,9 @@ enum mddev_flags {
 	MD_UPDATING_SB,		/* md_check_recovery is updating the metadata
 				 * without explicitly holding reconfig_mutex.
 				 */
+	MD_NOT_READY,		/* do_md_run() is active, so 'array_state'
+				 * must not report that array is ready yet
+				 */
 };
 
 enum mddev_sb_flags {
@@ -543,7 +546,7 @@ struct md_personality
 	int level;
 	struct list_head list;
 	struct module *owner;
-	bool (*make_request)(struct mddev *mddev, struct bio *bio);
+	bool __must_check (*make_request)(struct mddev *mddev, struct bio *bio);
 	/*
 	 * start up works that do NOT require md_thread. tasks that
 	 * requires md_thread should go into start()
@@ -696,7 +699,7 @@ extern void md_error(struct mddev *mddev, struct md_rdev *rdev);
 extern void md_finish_reshape(struct mddev *mddev);
 
 extern int mddev_congested(struct mddev *mddev, int bits);
-extern void md_flush_request(struct mddev *mddev, struct bio *bio);
+extern bool __must_check md_flush_request(struct mddev *mddev, struct bio *bio);
 extern void md_super_write(struct mddev *mddev, struct md_rdev *rdev,
 			   sector_t sector, int size, struct page *page);
 extern int md_super_wait(struct mddev *mddev);

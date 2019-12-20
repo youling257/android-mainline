@@ -178,10 +178,13 @@ static int init_memcg_params(struct kmem_cache *s,
 
 static void destroy_memcg_params(struct kmem_cache *s)
 {
-	if (is_root_cache(s))
+	if (is_root_cache(s)) {
 		kvfree(rcu_access_pointer(s->memcg_params.memcg_caches));
-	else
+	} else {
+		mem_cgroup_put(s->memcg_params.memcg);
+		WRITE_ONCE(s->memcg_params.memcg, NULL);
 		percpu_ref_exit(&s->memcg_params.refcnt);
+	}
 }
 
 static void free_memcg_params(struct rcu_head *rcu)
@@ -253,8 +256,6 @@ static void memcg_unlink_cache(struct kmem_cache *s)
 	} else {
 		list_del(&s->memcg_params.children_node);
 		list_del(&s->memcg_params.kmem_caches_node);
-		mem_cgroup_put(s->memcg_params.memcg);
-		WRITE_ONCE(s->memcg_params.memcg, NULL);
 	}
 }
 #else
@@ -903,6 +904,18 @@ static void flush_memcg_workqueue(struct kmem_cache *s)
 	 * previous workitems on workqueue are processed.
 	 */
 	flush_workqueue(memcg_kmem_cache_wq);
+
+	/*
+	 * If we're racing with children kmem_cache deactivation, it might
+	 * take another rcu grace period to complete their destruction.
+	 * At this moment the corresponding percpu_ref_kill() call should be
+	 * done, but it might take another rcu grace period to complete
+	 * switching to the atomic mode.
+	 * Please, note that we check without grabbing the slab_mutex. It's safe
+	 * because at this moment the children list can't grow.
+	 */
+	if (!list_empty(&s->memcg_params.children))
+		rcu_barrier();
 }
 #else
 static inline int shutdown_memcg_caches(struct kmem_cache *s)

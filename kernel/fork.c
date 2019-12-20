@@ -1716,11 +1716,11 @@ static void pidfd_show_fdinfo(struct seq_file *m, struct file *f)
 /*
  * Poll support for process exit notification.
  */
-static unsigned int pidfd_poll(struct file *file, struct poll_table_struct *pts)
+static __poll_t pidfd_poll(struct file *file, struct poll_table_struct *pts)
 {
 	struct task_struct *task;
 	struct pid *pid = file->private_data;
-	int poll_flags = 0;
+	__poll_t poll_flags = 0;
 
 	poll_wait(file, &pid->wait_pidfd, pts);
 
@@ -1732,7 +1732,7 @@ static unsigned int pidfd_poll(struct file *file, struct poll_table_struct *pts)
 	 * group, then poll(2) should block, similar to the wait(2) family.
 	 */
 	if (!task || (task->exit_state && thread_group_empty(task)))
-		poll_flags = POLLIN | POLLRDNORM;
+		poll_flags = EPOLLIN | EPOLLRDNORM;
 	rcu_read_unlock();
 
 	return poll_flags;
@@ -2593,7 +2593,35 @@ noinline static int copy_clone_args_from_user(struct kernel_clone_args *kargs,
 	return 0;
 }
 
-static bool clone3_args_valid(const struct kernel_clone_args *kargs)
+/**
+ * clone3_stack_valid - check and prepare stack
+ * @kargs: kernel clone args
+ *
+ * Verify that the stack arguments userspace gave us are sane.
+ * In addition, set the stack direction for userspace since it's easy for us to
+ * determine.
+ */
+static inline bool clone3_stack_valid(struct kernel_clone_args *kargs)
+{
+	if (kargs->stack == 0) {
+		if (kargs->stack_size > 0)
+			return false;
+	} else {
+		if (kargs->stack_size == 0)
+			return false;
+
+		if (!access_ok((void __user *)kargs->stack, kargs->stack_size))
+			return false;
+
+#if !defined(CONFIG_STACK_GROWSUP) && !defined(CONFIG_IA64)
+		kargs->stack += kargs->stack_size;
+#endif
+	}
+
+	return true;
+}
+
+static bool clone3_args_valid(struct kernel_clone_args *kargs)
 {
 	/*
 	 * All lower bits of the flag word are taken.
@@ -2611,6 +2639,9 @@ static bool clone3_args_valid(const struct kernel_clone_args *kargs)
 
 	if ((kargs->flags & (CLONE_THREAD | CLONE_PARENT)) &&
 	    kargs->exit_signal)
+		return false;
+
+	if (!clone3_stack_valid(kargs))
 		return false;
 
 	return true;
@@ -2946,7 +2977,7 @@ int sysctl_max_threads(struct ctl_table *table, int write,
 	struct ctl_table t;
 	int ret;
 	int threads = max_threads;
-	int min = MIN_THREADS;
+	int min = 1;
 	int max = MAX_THREADS;
 
 	t = *table;
@@ -2958,7 +2989,7 @@ int sysctl_max_threads(struct ctl_table *table, int write,
 	if (ret || !write)
 		return ret;
 
-	set_max_threads(threads);
+	max_threads = threads;
 
 	return 0;
 }

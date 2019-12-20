@@ -3467,18 +3467,22 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	qdisc_calculate_pkt_len(skb, q);
 
 	if (q->flags & TCQ_F_NOLOCK) {
-		if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
-			__qdisc_drop(skb, &to_free);
-			rc = NET_XMIT_DROP;
-		} else if ((q->flags & TCQ_F_CAN_BYPASS) && q->empty &&
-			   qdisc_run_begin(q)) {
+		if ((q->flags & TCQ_F_CAN_BYPASS) && q->empty &&
+		    qdisc_run_begin(q)) {
+			if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED,
+					      &q->state))) {
+				__qdisc_drop(skb, &to_free);
+				rc = NET_XMIT_DROP;
+				goto end_run;
+			}
 			qdisc_bstats_cpu_update(q, skb);
 
+			rc = NET_XMIT_SUCCESS;
 			if (sch_direct_xmit(skb, q, dev, txq, NULL, true))
 				__qdisc_run(q);
 
+end_run:
 			qdisc_run_end(q);
-			rc = NET_XMIT_SUCCESS;
 		} else {
 			rc = q->enqueue(skb, q, &to_free) & NET_XMIT_MASK;
 			qdisc_run(q);
@@ -7658,7 +7662,8 @@ int __dev_set_mtu(struct net_device *dev, int new_mtu)
 	if (ops->ndo_change_mtu)
 		return ops->ndo_change_mtu(dev, new_mtu);
 
-	dev->mtu = new_mtu;
+	/* Pairs with all the lockless reads of dev->mtu in the stack */
+	WRITE_ONCE(dev->mtu, new_mtu);
 	return 0;
 }
 EXPORT_SYMBOL(__dev_set_mtu);
@@ -9407,7 +9412,7 @@ int dev_change_net_namespace(struct net_device *dev, struct net *net, const char
 	call_netdevice_notifiers(NETDEV_UNREGISTER, dev);
 	rcu_barrier();
 
-	new_nsid = peernet2id_alloc(dev_net(dev), net);
+	new_nsid = peernet2id_alloc(dev_net(dev), net, GFP_KERNEL);
 	/* If there is an ifindex conflict assign a new one */
 	if (__dev_get_by_index(net, dev->ifindex))
 		new_ifindex = dev_new_index(net);

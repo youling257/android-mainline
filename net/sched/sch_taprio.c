@@ -842,7 +842,7 @@ static int taprio_parse_mqprio_opt(struct net_device *dev,
 	}
 
 	/* Verify priority mapping uses valid tcs */
-	for (i = 0; i < TC_BITMASK + 1; i++) {
+	for (i = 0; i <= TC_BITMASK; i++) {
 		if (qopt->prio_tc_map[i] >= qopt->num_tc) {
 			NL_SET_ERR_MSG(extack, "Invalid traffic class in priority to traffic class mapping");
 			return -EINVAL;
@@ -961,12 +961,11 @@ static void taprio_set_picos_per_byte(struct net_device *dev,
 	if (err < 0)
 		goto skip;
 
-	if (ecmd.base.speed != SPEED_UNKNOWN)
+	if (ecmd.base.speed && ecmd.base.speed != SPEED_UNKNOWN)
 		speed = ecmd.base.speed;
 
 skip:
-	picos_per_byte = div64_s64(NSEC_PER_SEC * 1000LL * 8,
-				   speed * 1000 * 1000);
+	picos_per_byte = (USEC_PER_SEC * 8) / speed;
 
 	atomic64_set(&q->picos_per_byte, picos_per_byte);
 	netdev_dbg(dev, "taprio: set %s's picos_per_byte to: %lld, linkspeed: %d\n",
@@ -1013,6 +1012,26 @@ static void setup_txtime(struct taprio_sched *q,
 		entry->next_txtime = ktime_add_ns(base, interval);
 		interval += entry->interval;
 	}
+}
+
+static int taprio_mqprio_cmp(const struct net_device *dev,
+			     const struct tc_mqprio_qopt *mqprio)
+{
+	int i;
+
+	if (!mqprio || mqprio->num_tc != dev->num_tc)
+		return -1;
+
+	for (i = 0; i < mqprio->num_tc; i++)
+		if (dev->tc_to_txq[i].count != mqprio->count[i] ||
+		    dev->tc_to_txq[i].offset != mqprio->offset[i])
+			return -1;
+
+	for (i = 0; i <= TC_BITMASK; i++)
+		if (dev->prio_tc_map[i] != mqprio->prio_tc_map[i])
+			return -1;
+
+	return 0;
 }
 
 static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
@@ -1065,6 +1084,10 @@ static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 	oper = rcu_dereference(q->oper_sched);
 	admin = rcu_dereference(q->admin_sched);
 	rcu_read_unlock();
+
+	/* no changes - no new mqprio settings */
+	if (!taprio_mqprio_cmp(dev, mqprio))
+		mqprio = NULL;
 
 	if (mqprio && (oper || admin)) {
 		NL_SET_ERR_MSG(extack, "Changing the traffic mapping of a running schedule is not supported");
@@ -1133,7 +1156,7 @@ static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 					    mqprio->offset[i]);
 
 		/* Always use supplied priority mappings */
-		for (i = 0; i < TC_BITMASK + 1; i++)
+		for (i = 0; i <= TC_BITMASK; i++)
 			netdev_set_prio_tc_map(dev, i,
 					       mqprio->prio_tc_map[i]);
 	}

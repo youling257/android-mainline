@@ -531,18 +531,23 @@ typedef struct srb {
 	 */
 	uint8_t cmd_type;
 	uint8_t pad[3];
-	atomic_t ref_count;
 	struct kref cmd_kref;	/* need to migrate ref_count over to this */
 	void *priv;
 	wait_queue_head_t nvme_ls_waitq;
 	struct fc_port *fcport;
 	struct scsi_qla_host *vha;
+	unsigned int start_timer:1;
+	unsigned int abort:1;
+	unsigned int aborted:1;
+	unsigned int completed:1;
+
 	uint32_t handle;
 	uint16_t flags;
 	uint16_t type;
 	const char *name;
 	int iocbs;
 	struct qla_qpair *qpair;
+	struct srb *cmd_sp;
 	struct list_head elem;
 	u32 gen1;	/* scratch */
 	u32 gen2;	/* scratch */
@@ -560,7 +565,6 @@ typedef struct srb {
 } srb_t;
 
 #define GET_CMD_SP(sp) (sp->u.scmd.cmd)
-#define SET_CMD_SP(sp, cmd) (sp->u.scmd.cmd = cmd)
 #define GET_CMD_CTX_SP(sp) (sp->u.scmd.ctx)
 
 #define GET_CMD_SENSE_LEN(sp) \
@@ -2338,6 +2342,7 @@ typedef struct fc_port {
 	unsigned int query:1;
 	unsigned int id_changed:1;
 	unsigned int scan_needed:1;
+	unsigned int n2n_flag:1;
 
 	struct completion nvme_del_done;
 	uint32_t nvme_prli_service_param;
@@ -2388,7 +2393,6 @@ typedef struct fc_port {
 	uint8_t fc4_type;
 	uint8_t	fc4f_nvme;
 	uint8_t scan_state;
-	uint8_t n2n_flag;
 
 	unsigned long last_queue_full;
 	unsigned long last_ramp_up;
@@ -2979,6 +2983,7 @@ enum scan_flags_t {
 enum fc4type_t {
 	FS_FC4TYPE_FCP	= BIT_0,
 	FS_FC4TYPE_NVME	= BIT_1,
+	FS_FCP_IS_N2N = BIT_7,
 };
 
 struct fab_scan_rp {
@@ -4628,6 +4633,7 @@ struct secure_flash_update_block_pk {
 #define QLA_SUSPENDED			0x106
 #define QLA_BUSY			0x107
 #define QLA_ALREADY_REGISTERED		0x109
+#define QLA_OS_TIMER_EXPIRED		0x10a
 
 #define NVRAM_DELAY()		udelay(10)
 

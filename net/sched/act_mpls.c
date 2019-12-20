@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright (C) 2019 Netronome Systems, Inc. */
 
+#include <linux/if_arp.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -55,7 +56,7 @@ static int tcf_mpls_act(struct sk_buff *skb, const struct tc_action *a,
 	struct tcf_mpls *m = to_mpls(a);
 	struct tcf_mpls_params *p;
 	__be32 new_lse;
-	int ret;
+	int ret, mac_len;
 
 	tcf_lastuse_update(&m->tcf_tm);
 	bstats_cpu_update(this_cpu_ptr(m->common.cpu_bstats), skb);
@@ -63,8 +64,12 @@ static int tcf_mpls_act(struct sk_buff *skb, const struct tc_action *a,
 	/* Ensure 'data' points at mac_header prior calling mpls manipulating
 	 * functions.
 	 */
-	if (skb_at_tc_ingress(skb))
+	if (skb_at_tc_ingress(skb)) {
 		skb_push_rcsum(skb, skb->mac_len);
+		mac_len = skb->mac_len;
+	} else {
+		mac_len = skb_network_header(skb) - skb_mac_header(skb);
+	}
 
 	ret = READ_ONCE(m->tcf_action);
 
@@ -72,12 +77,14 @@ static int tcf_mpls_act(struct sk_buff *skb, const struct tc_action *a,
 
 	switch (p->tcfm_action) {
 	case TCA_MPLS_ACT_POP:
-		if (skb_mpls_pop(skb, p->tcfm_proto))
+		if (skb_mpls_pop(skb, p->tcfm_proto, mac_len,
+				 skb->dev && skb->dev->type == ARPHRD_ETHER))
 			goto drop;
 		break;
 	case TCA_MPLS_ACT_PUSH:
 		new_lse = tcf_mpls_get_lse(NULL, p, !eth_p_mpls(skb->protocol));
-		if (skb_mpls_push(skb, new_lse, p->tcfm_proto))
+		if (skb_mpls_push(skb, new_lse, p->tcfm_proto, mac_len,
+				  skb->dev && skb->dev->type == ARPHRD_ETHER))
 			goto drop;
 		break;
 	case TCA_MPLS_ACT_MODIFY:

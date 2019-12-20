@@ -1347,9 +1347,13 @@ static void mlx5e_deactivate_txqsq(struct mlx5e_txqsq *sq)
 	/* last doorbell out, godspeed .. */
 	if (mlx5e_wqc_has_room_for(wq, sq->cc, sq->pc, 1)) {
 		u16 pi = mlx5_wq_cyc_ctr2ix(wq, sq->pc);
+		struct mlx5e_tx_wqe_info *wi;
 		struct mlx5e_tx_wqe *nop;
 
-		sq->db.wqe_info[pi].skb = NULL;
+		wi = &sq->db.wqe_info[pi];
+
+		memset(wi, 0, sizeof(*wi));
+		wi->num_wqebbs = 1;
 		nop = mlx5e_post_nop(wq, sq->sqn, &sq->pc);
 		mlx5e_notify_hw(wq, sq->pc, sq->uar_map, &nop->ctrl);
 	}
@@ -1674,11 +1678,10 @@ static int mlx5e_open_sqs(struct mlx5e_channel *c,
 			  struct mlx5e_params *params,
 			  struct mlx5e_channel_param *cparam)
 {
-	struct mlx5e_priv *priv = c->priv;
 	int err, tc;
 
 	for (tc = 0; tc < params->num_tc; tc++) {
-		int txq_ix = c->ix + tc * priv->max_nch;
+		int txq_ix = c->ix + tc * params->num_channels;
 
 		err = mlx5e_open_txqsq(c, c->priv->tisn[tc], txq_ix,
 				       params, &cparam->sq, &c->sq[tc], tc);
@@ -2852,26 +2855,21 @@ static void mlx5e_netdev_set_tcs(struct net_device *netdev)
 		netdev_set_tc_queue(netdev, tc, nch, 0);
 }
 
-static void mlx5e_build_tc2txq_maps(struct mlx5e_priv *priv)
+static void mlx5e_build_txq_maps(struct mlx5e_priv *priv)
 {
-	int i, tc;
+	int i, ch;
 
-	for (i = 0; i < priv->max_nch; i++)
-		for (tc = 0; tc < priv->profile->max_tc; tc++)
-			priv->channel_tc2txq[i][tc] = i + tc * priv->max_nch;
-}
+	ch = priv->channels.num;
 
-static void mlx5e_build_tx2sq_maps(struct mlx5e_priv *priv)
-{
-	struct mlx5e_channel *c;
-	struct mlx5e_txqsq *sq;
-	int i, tc;
+	for (i = 0; i < ch; i++) {
+		int tc;
 
-	for (i = 0; i < priv->channels.num; i++) {
-		c = priv->channels.c[i];
-		for (tc = 0; tc < c->num_tc; tc++) {
-			sq = &c->sq[tc];
+		for (tc = 0; tc < priv->channels.params.num_tc; tc++) {
+			struct mlx5e_channel *c = priv->channels.c[i];
+			struct mlx5e_txqsq *sq = &c->sq[tc];
+
 			priv->txq2sq[sq->txq_ix] = sq;
+			priv->channel_tc2realtxq[i][tc] = i + tc * ch;
 		}
 	}
 }
@@ -2886,7 +2884,7 @@ void mlx5e_activate_priv_channels(struct mlx5e_priv *priv)
 	netif_set_real_num_tx_queues(netdev, num_txqs);
 	netif_set_real_num_rx_queues(netdev, num_rxqs);
 
-	mlx5e_build_tx2sq_maps(priv);
+	mlx5e_build_txq_maps(priv);
 	mlx5e_activate_channels(&priv->channels);
 	mlx5e_xdp_tx_enable(priv);
 	netif_tx_start_all_queues(priv->netdev);
@@ -4964,7 +4962,6 @@ static int mlx5e_nic_init(struct mlx5_core_dev *mdev,
 	if (err)
 		mlx5_core_err(mdev, "TLS initialization failed, %d\n", err);
 	mlx5e_build_nic_netdev(netdev);
-	mlx5e_build_tc2txq_maps(priv);
 
 	return 0;
 }

@@ -897,17 +897,9 @@ static bool update_transition_efer(struct vcpu_vmx *vmx, int efer_offset)
 	u64 guest_efer = vmx->vcpu.arch.efer;
 	u64 ignore_bits = 0;
 
-	if (!enable_ept) {
-		/*
-		 * NX is needed to handle CR0.WP=1, CR4.SMEP=1.  Testing
-		 * host CPUID is more efficient than testing guest CPUID
-		 * or CR4.  Host SMEP is anyway a requirement for guest SMEP.
-		 */
-		if (boot_cpu_has(X86_FEATURE_SMEP))
-			guest_efer |= EFER_NX;
-		else if (!(guest_efer & EFER_NX))
-			ignore_bits |= EFER_NX;
-	}
+	/* Shadow paging assumes NX to be available.  */
+	if (!enable_ept)
+		guest_efer |= EFER_NX;
 
 	/*
 	 * LMA and LME handled by hardware; SCE meaningless outside long mode.
@@ -2886,6 +2878,7 @@ u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa)
 void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 {
 	struct kvm *kvm = vcpu->kvm;
+	bool update_guest_cr3 = true;
 	unsigned long guest_cr3;
 	u64 eptp;
 
@@ -2902,15 +2895,18 @@ void vmx_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
 			spin_unlock(&to_kvm_vmx(kvm)->ept_pointer_lock);
 		}
 
-		if (enable_unrestricted_guest || is_paging(vcpu) ||
-		    is_guest_mode(vcpu))
+		/* Loading vmcs02.GUEST_CR3 is handled by nested VM-Enter. */
+		if (is_guest_mode(vcpu))
+			update_guest_cr3 = false;
+		else if (enable_unrestricted_guest || is_paging(vcpu))
 			guest_cr3 = kvm_read_cr3(vcpu);
 		else
 			guest_cr3 = to_kvm_vmx(kvm)->ept_identity_map_addr;
 		ept_load_pdptrs(vcpu);
 	}
 
-	vmcs_writel(GUEST_CR3, guest_cr3);
+	if (update_guest_cr3)
+		vmcs_writel(GUEST_CR3, guest_cr3);
 }
 
 int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
@@ -7369,10 +7365,14 @@ static int vmx_update_pi_irte(struct kvm *kvm, unsigned int host_irq,
 		 * irqbalance to make the interrupts single-CPU.
 		 *
 		 * We will support full lowest-priority interrupt later.
+		 *
+		 * In addition, we can only inject generic interrupts using
+		 * the PI mechanism, refuse to route others through it.
 		 */
 
 		kvm_set_msi_irq(kvm, e, &irq);
-		if (!kvm_intr_is_single_vcpu(kvm, &irq, &vcpu)) {
+		if (!kvm_intr_is_single_vcpu(kvm, &irq, &vcpu) ||
+		    !kvm_irq_is_postable(&irq)) {
 			/*
 			 * Make sure the IRTE is in remapped mode if
 			 * we don't handle it in posted mode.
