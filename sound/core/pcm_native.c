@@ -246,8 +246,8 @@ static bool hw_support_mmap(struct snd_pcm_substream *substream)
 	if (!(substream->runtime->hw.info & SNDRV_PCM_INFO_MMAP))
 		return false;
 
-	if (substream->ops->mmap || substream->ops->page)
-		return true;
+#if defined(CONFIG_MMU) || !defined(CONFIG_HAS_DMA)
+	if (!substream->ops->mmap || substream->ops->page)
 
 	switch (substream->dma_buffer.dev.type) {
 	case SNDRV_DMA_TYPE_UNKNOWN:
@@ -259,8 +259,10 @@ static bool hw_support_mmap(struct snd_pcm_substream *substream)
 	case SNDRV_DMA_TYPE_VMALLOC:
 		return true;
 	default:
-		return dma_can_mmap(substream->dma_buffer.dev.dev);
+		return false;
 	}
+#endif
+	return true;
 }
 
 static int constrain_mask_params(struct snd_pcm_substream *substream,
