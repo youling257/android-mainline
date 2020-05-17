@@ -117,15 +117,15 @@ err_free_tfm:
  */
 int fscrypt_prepare_key(struct fscrypt_prepared_key *prep_key,
 			const u8 *raw_key, unsigned int raw_key_size,
-			const struct fscrypt_info *ci)
+			bool is_hw_wrapped, const struct fscrypt_info *ci)
 {
 	struct crypto_skcipher *tfm;
 
 	if (fscrypt_using_inline_encryption(ci))
 		return fscrypt_prepare_inline_crypt_key(prep_key,
-				raw_key, raw_key_size, ci);
+				raw_key, raw_key_size, is_hw_wrapped, ci);
 
-	if (WARN_ON(raw_key_size != ci->ci_mode->keysize))
+	if (WARN_ON(is_hw_wrapped || raw_key_size != ci->ci_mode->keysize))
 		return -EINVAL;
 
 	tfm = fscrypt_allocate_skcipher(ci->ci_mode, raw_key, ci->ci_inode);
@@ -150,8 +150,8 @@ void fscrypt_destroy_prepared_key(struct fscrypt_prepared_key *prep_key)
 int fscrypt_set_per_file_enc_key(struct fscrypt_info *ci, const u8 *raw_key)
 {
 	ci->ci_owns_key = true;
-	return fscrypt_prepare_key(&ci->ci_key, raw_key,
-				   ci->ci_mode->keysize, ci);
+	return fscrypt_prepare_key(&ci->ci_key, raw_key, ci->ci_mode->keysize,
+				   false /*is_hw_wrapped*/, ci);
 }
 
 static int setup_per_mode_enc_key(struct fscrypt_info *ci,
@@ -202,7 +202,7 @@ static int setup_per_mode_enc_key(struct fscrypt_info *ci,
 			}
 		}
 		err = fscrypt_prepare_key(prep_key, mk->mk_secret.raw,
-					  mk->mk_secret.size, ci);
+					  mk->mk_secret.size, true, ci);
 		if (err)
 			goto out_unlock;
 	} else {
@@ -221,7 +221,7 @@ static int setup_per_mode_enc_key(struct fscrypt_info *ci,
 		if (err)
 			goto out_unlock;
 		err = fscrypt_prepare_key(prep_key, mode_key, mode->keysize,
-					  ci);
+					  false /*is_hw_wrapped*/, ci);
 		memzero_explicit(mode_key, mode->keysize);
 		if (err)
 			goto out_unlock;
@@ -328,8 +328,6 @@ static int setup_file_encryption_key(struct fscrypt_info *ci,
 	struct fscrypt_key_specifier mk_spec;
 	int err;
 
-	fscrypt_select_encryption_impl(ci);
-
 	switch (ci->ci_policy.version) {
 	case FSCRYPT_POLICY_V1:
 		mk_spec.type = FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR;
@@ -353,6 +351,10 @@ static int setup_file_encryption_key(struct fscrypt_info *ci,
 		if (key != ERR_PTR(-ENOKEY) ||
 		    ci->ci_policy.version != FSCRYPT_POLICY_V1)
 			return PTR_ERR(key);
+
+		err = fscrypt_select_encryption_impl(ci, false);
+		if (err)
+			return err;
 
 		/*
 		 * As a legacy fallback for v1 policies, search for the key in
@@ -387,6 +389,10 @@ static int setup_file_encryption_key(struct fscrypt_info *ci,
 		err = -ENOKEY;
 		goto out_release_key;
 	}
+
+	err = fscrypt_select_encryption_impl(ci, mk->mk_secret.is_hw_wrapped);
+	if (err)
+		goto out_release_key;
 
 	switch (ci->ci_policy.version) {
 	case FSCRYPT_POLICY_V1:
@@ -494,20 +500,8 @@ int fscrypt_get_encryption_info(struct inode *inode)
 		goto out;
 	}
 
-	switch (ctx.version) {
-	case FSCRYPT_CONTEXT_V1:
-		memcpy(crypt_info->ci_nonce, ctx.v1.nonce,
-		       FS_KEY_DERIVATION_NONCE_SIZE);
-		break;
-	case FSCRYPT_CONTEXT_V2:
-		memcpy(crypt_info->ci_nonce, ctx.v2.nonce,
-		       FS_KEY_DERIVATION_NONCE_SIZE);
-		break;
-	default:
-		WARN_ON(1);
-		res = -EINVAL;
-		goto out;
-	}
+	memcpy(crypt_info->ci_nonce, fscrypt_context_nonce(&ctx),
+	       FS_KEY_DERIVATION_NONCE_SIZE);
 
 	if (!fscrypt_supported_policy(&crypt_info->ci_policy, inode)) {
 		res = -EINVAL;
@@ -606,6 +600,15 @@ int fscrypt_drop_inode(struct inode *inode)
 	if (!ci || !ci->ci_master_key)
 		return 0;
 	mk = ci->ci_master_key->payload.data[0];
+
+	/*
+	 * With proper, non-racy use of FS_IOC_REMOVE_ENCRYPTION_KEY, all inodes
+	 * protected by the key were cleaned by sync_filesystem().  But if
+	 * userspace is still using the files, inodes can be dirtied between
+	 * then and now.  We mustn't lose any writes, so skip dirty inodes here.
+	 */
+	if (inode->i_state & I_DIRTY_ALL)
+		return 0;
 
 	/*
 	 * Note: since we aren't holding ->mk_secret_sem, the result here can

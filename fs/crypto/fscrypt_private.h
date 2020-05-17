@@ -78,6 +78,26 @@ static inline int fscrypt_context_size(const union fscrypt_context *ctx)
 	return 0;
 }
 
+/* Check whether an fscrypt_context has a recognized version number and size */
+static inline bool fscrypt_context_is_valid(const union fscrypt_context *ctx,
+					    int ctx_size)
+{
+	return ctx_size >= 1 && ctx_size == fscrypt_context_size(ctx);
+}
+
+/* Retrieve the context's nonce, assuming the context was already validated */
+static inline const u8 *fscrypt_context_nonce(const union fscrypt_context *ctx)
+{
+	switch (ctx->version) {
+	case FSCRYPT_CONTEXT_V1:
+		return ctx->v1.nonce;
+	case FSCRYPT_CONTEXT_V2:
+		return ctx->v2.nonce;
+	}
+	WARN_ON(1);
+	return NULL;
+}
+
 #undef fscrypt_policy
 union fscrypt_policy {
 	u8 version;
@@ -275,7 +295,6 @@ extern int fscrypt_fname_encrypt(const struct inode *inode,
 extern bool fscrypt_fname_encrypted_size(const struct inode *inode,
 					 u32 orig_len, u32 max_len,
 					 u32 *encrypted_len_ret);
-extern const struct dentry_operations fscrypt_d_ops;
 
 /* hkdf.c */
 
@@ -307,7 +326,8 @@ extern void fscrypt_destroy_hkdf(struct fscrypt_hkdf *hkdf);
 
 /* inline_crypt.c */
 #ifdef CONFIG_FS_ENCRYPTION_INLINE_CRYPT
-extern void fscrypt_select_encryption_impl(struct fscrypt_info *ci);
+extern int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
+					  bool is_hw_wrapped_key);
 
 static inline bool
 fscrypt_using_inline_encryption(const struct fscrypt_info *ci)
@@ -319,6 +339,7 @@ extern int fscrypt_prepare_inline_crypt_key(
 					struct fscrypt_prepared_key *prep_key,
 					const u8 *raw_key,
 					unsigned int raw_key_size,
+					bool is_hw_wrapped,
 					const struct fscrypt_info *ci);
 
 extern void fscrypt_destroy_inline_crypt_key(
@@ -350,8 +371,10 @@ fscrypt_is_key_prepared(struct fscrypt_prepared_key *prep_key,
 
 #else /* CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
 
-static inline void fscrypt_select_encryption_impl(struct fscrypt_info *ci)
+static inline int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
+						 bool is_hw_wrapped_key)
 {
+	return 0;
 }
 
 static inline bool fscrypt_using_inline_encryption(
@@ -363,6 +386,7 @@ static inline bool fscrypt_using_inline_encryption(
 static inline int
 fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 				 const u8 *raw_key, unsigned int raw_key_size,
+				 bool is_hw_wrapped,
 				 const struct fscrypt_info *ci)
 {
 	WARN_ON(1);
@@ -557,6 +581,7 @@ extern struct fscrypt_mode fscrypt_modes[];
 
 extern int fscrypt_prepare_key(struct fscrypt_prepared_key *prep_key,
 			       const u8 *raw_key, unsigned int raw_key_size,
+			       bool is_hw_wrapped,
 			       const struct fscrypt_info *ci);
 
 extern void fscrypt_destroy_prepared_key(struct fscrypt_prepared_key *prep_key);
