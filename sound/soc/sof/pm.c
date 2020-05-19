@@ -150,9 +150,6 @@ static int sof_suspend(struct device *dev, bool runtime_suspend)
 	if (sdev->fw_state != SOF_FW_BOOT_COMPLETE)
 		goto power_down;
 
-	if (sdev->fw_state != SOF_FW_BOOT_COMPLETE)
-		goto power_down;
-
 	/* release trace */
 	snd_sof_release_trace(sdev);
 
