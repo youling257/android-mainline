@@ -32,9 +32,9 @@
 struct proc_fs_context {
 	struct pid_namespace	*pid_ns;
 	unsigned int		mask;
-	enum proc_hidepid	hidepid;
+	int			hidepid;
 	int			gid;
-	enum proc_pidonly	pidonly;
+	int			pidonly;
 };
 
 enum proc_param {
