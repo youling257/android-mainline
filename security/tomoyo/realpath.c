@@ -7,7 +7,6 @@
 
 #include "common.h"
 #include <linux/magic.h>
-#include <linux/proc_fs.h>
 
 /**
  * tomoyo_encode2 - Encode binary string to ascii string.
@@ -162,10 +161,9 @@ static char *tomoyo_get_local_path(struct dentry *dentry, char * const buffer,
 	if (sb->s_magic == PROC_SUPER_MAGIC && *pos == '/') {
 		char *ep;
 		const pid_t pid = (pid_t) simple_strtoul(pos + 1, &ep, 10);
-		struct pid_namespace *proc_pidns = proc_pid_ns(d_inode(dentry));
 
 		if (*ep == '/' && pid && pid ==
-		    task_tgid_nr_ns(current, proc_pidns)) {
+		    task_tgid_nr_ns(current, sb->s_fs_info)) {
 			pos = ep - 5;
 			if (pos < buffer)
 				goto out;
