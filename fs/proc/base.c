@@ -707,7 +707,7 @@ int proc_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
  */
 static bool has_pid_permissions(struct proc_fs_info *fs_info,
 				 struct task_struct *task,
-				 enum proc_hidepid hide_pid_min)
+				 int hide_pid_min)
 {
 	/*
 	 * If 'hidpid' mount option is set force a ptrace check,
