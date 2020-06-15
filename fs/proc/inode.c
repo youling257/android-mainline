@@ -166,7 +166,7 @@ void proc_invalidate_siblings_dcache(struct hlist_head *inodes, spinlock_t *lock
 		deactivate_super(old_sb);
 }
 
-static inline const char *hidepid2str(enum proc_hidepid v)
+static inline const char *hidepid2str(int v)
 {
 	switch (v) {
 		case HIDEPID_OFF: return "off";
