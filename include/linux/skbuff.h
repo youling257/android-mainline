@@ -283,6 +283,7 @@ struct nf_bridge_info {
  */
 struct tc_skb_ext {
 	__u32 chain;
+	__u16 mru;
 };
 #endif
 
@@ -3941,6 +3942,14 @@ static inline void __skb_incr_checksum_unnecessary(struct sk_buff *skb)
 			skb->csum_level++;
 	} else if (skb->ip_summed == CHECKSUM_NONE) {
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb->csum_level = 0;
+	}
+}
+
+static inline void __skb_reset_checksum_unnecessary(struct sk_buff *skb)
+{
+	if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
+		skb->ip_summed = CHECKSUM_NONE;
 		skb->csum_level = 0;
 	}
 }
