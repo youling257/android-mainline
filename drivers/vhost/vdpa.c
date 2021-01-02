@@ -428,12 +428,11 @@ static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 	void __user *argp = (void __user *)arg;
 	u64 __user *featurep = argp;
 	u64 features;
-	long r;
+	long r = 0;
 
 	if (cmd == VHOST_SET_BACKEND_FEATURES) {
-		r = copy_from_user(&features, featurep, sizeof(features));
-		if (r)
-			return r;
+		if (copy_from_user(&features, featurep, sizeof(features)))
+			return -EFAULT;
 		if (features & ~VHOST_VDPA_BACKEND_FEATURES)
 			return -EOPNOTSUPP;
 		vhost_set_backend_features(&v->vdev, features);
@@ -476,7 +475,8 @@ static long vhost_vdpa_unlocked_ioctl(struct file *filep,
 		break;
 	case VHOST_GET_BACKEND_FEATURES:
 		features = VHOST_VDPA_BACKEND_FEATURES;
-		r = copy_to_user(featurep, &features, sizeof(features));
+		if (copy_to_user(featurep, &features, sizeof(features)))
+			r = -EFAULT;
 		break;
 	default:
 		r = vhost_dev_ioctl(&v->vdev, cmd, argp);
@@ -567,6 +567,8 @@ static int vhost_vdpa_map(struct vhost_vdpa *v,
 
 	if (r)
 		vhost_iotlb_del_range(dev->iotlb, iova, iova + size - 1);
+	else
+		atomic64_add(size >> PAGE_SHIFT, &dev->mm->pinned_vm);
 
 	return r;
 }
@@ -595,11 +597,10 @@ static int vhost_vdpa_process_iotlb_update(struct vhost_vdpa *v,
 	struct vhost_dev *dev = &v->vdev;
 	struct vhost_iotlb *iotlb = dev->iotlb;
 	struct page **page_list;
-	struct vm_area_struct **vmas;
+	unsigned long list_size = PAGE_SIZE / sizeof(struct page *);
 	unsigned int gup_flags = FOLL_LONGTERM;
-	unsigned long map_pfn, last_pfn = 0;
-	unsigned long npages, lock_limit;
-	unsigned long i, nmap = 0;
+	unsigned long npages, cur_base, map_pfn, last_pfn = 0;
+	unsigned long lock_limit, sz2pin, nchunks, i;
 	u64 iova = msg->iova;
 	long pinned;
 	int ret = 0;
@@ -608,18 +609,17 @@ static int vhost_vdpa_process_iotlb_update(struct vhost_vdpa *v,
 				    msg->iova + msg->size - 1))
 		return -EEXIST;
 
+	/* Limit the use of memory for bookkeeping */
+	page_list = (struct page **) __get_free_page(GFP_KERNEL);
+	if (!page_list)
+		return -ENOMEM;
+
 	if (msg->perm & VHOST_ACCESS_WO)
 		gup_flags |= FOLL_WRITE;
 
 	npages = PAGE_ALIGN(msg->size + (iova & ~PAGE_MASK)) >> PAGE_SHIFT;
-	if (!npages)
-		return -EINVAL;
-
-	page_list = kvmalloc_array(npages, sizeof(struct page *), GFP_KERNEL);
-	vmas = kvmalloc_array(npages, sizeof(struct vm_area_struct *),
-			      GFP_KERNEL);
-	if (!page_list || !vmas) {
-		ret = -ENOMEM;
+	if (!npages) {
+		ret = -EINVAL;
 		goto free;
 	}
 
@@ -631,70 +631,91 @@ static int vhost_vdpa_process_iotlb_update(struct vhost_vdpa *v,
 		goto unlock;
 	}
 
-	pinned = pin_user_pages(msg->uaddr & PAGE_MASK, npages, gup_flags,
-				page_list, vmas);
-	if (npages != pinned) {
-		if (pinned < 0) {
-			ret = pinned;
-		} else {
-			unpin_user_pages(page_list, pinned);
-			ret = -ENOMEM;
-		}
-		goto unlock;
-	}
-
+	cur_base = msg->uaddr & PAGE_MASK;
 	iova &= PAGE_MASK;
-	map_pfn = page_to_pfn(page_list[0]);
+	nchunks = 0;
 
-	/* One more iteration to avoid extra vdpa_map() call out of loop. */
-	for (i = 0; i <= npages; i++) {
-		unsigned long this_pfn;
-		u64 csize;
-
-		/* The last chunk may have no valid PFN next to it */
-		this_pfn = i < npages ? page_to_pfn(page_list[i]) : -1UL;
-
-		if (last_pfn && (this_pfn == -1UL ||
-				 this_pfn != last_pfn + 1)) {
-			/* Pin a contiguous chunk of memory */
-			csize = last_pfn - map_pfn + 1;
-			ret = vhost_vdpa_map(v, iova, csize << PAGE_SHIFT,
-					     map_pfn << PAGE_SHIFT,
-					     msg->perm);
-			if (ret) {
-				/*
-				 * Unpin the rest chunks of memory on the
-				 * flight with no corresponding vdpa_map()
-				 * calls having been made yet. On the other
-				 * hand, vdpa_unmap() in the failure path
-				 * is in charge of accounting the number of
-				 * pinned pages for its own.
-				 * This asymmetrical pattern of accounting
-				 * is for efficiency to pin all pages at
-				 * once, while there is no other callsite
-				 * of vdpa_map() than here above.
-				 */
-				unpin_user_pages(&page_list[nmap],
-						 npages - nmap);
-				goto out;
+	while (npages) {
+		sz2pin = min_t(unsigned long, npages, list_size);
+		pinned = pin_user_pages(cur_base, sz2pin,
+					gup_flags, page_list, NULL);
+		if (sz2pin != pinned) {
+			if (pinned < 0) {
+				ret = pinned;
+			} else {
+				unpin_user_pages(page_list, pinned);
+				ret = -ENOMEM;
 			}
-			atomic64_add(csize, &dev->mm->pinned_vm);
-			nmap += csize;
-			iova += csize << PAGE_SHIFT;
-			map_pfn = this_pfn;
+			goto out;
 		}
-		last_pfn = this_pfn;
+		nchunks++;
+
+		if (!last_pfn)
+			map_pfn = page_to_pfn(page_list[0]);
+
+		for (i = 0; i < pinned; i++) {
+			unsigned long this_pfn = page_to_pfn(page_list[i]);
+			u64 csize;
+
+			if (last_pfn && (this_pfn != last_pfn + 1)) {
+				/* Pin a contiguous chunk of memory */
+				csize = (last_pfn - map_pfn + 1) << PAGE_SHIFT;
+				ret = vhost_vdpa_map(v, iova, csize,
+						     map_pfn << PAGE_SHIFT,
+						     msg->perm);
+				if (ret) {
+					/*
+					 * Unpin the pages that are left unmapped
+					 * from this point on in the current
+					 * page_list. The remaining outstanding
+					 * ones which may stride across several
+					 * chunks will be covered in the common
+					 * error path subsequently.
+					 */
+					unpin_user_pages(&page_list[i],
+							 pinned - i);
+					goto out;
+				}
+
+				map_pfn = this_pfn;
+				iova += csize;
+				nchunks = 0;
+			}
+
+			last_pfn = this_pfn;
+		}
+
+		cur_base += pinned << PAGE_SHIFT;
+		npages -= pinned;
 	}
 
-	WARN_ON(nmap != npages);
+	/* Pin the rest chunk */
+	ret = vhost_vdpa_map(v, iova, (last_pfn - map_pfn + 1) << PAGE_SHIFT,
+			     map_pfn << PAGE_SHIFT, msg->perm);
 out:
-	if (ret)
+	if (ret) {
+		if (nchunks) {
+			unsigned long pfn;
+
+			/*
+			 * Unpin the outstanding pages which are yet to be
+			 * mapped but haven't due to vdpa_map() or
+			 * pin_user_pages() failure.
+			 *
+			 * Mapped pages are accounted in vdpa_map(), hence
+			 * the corresponding unpinning will be handled by
+			 * vdpa_unmap().
+			 */
+			WARN_ON(!last_pfn);
+			for (pfn = map_pfn; pfn <= last_pfn; pfn++)
+				unpin_user_page(pfn_to_page(pfn));
+		}
 		vhost_vdpa_unmap(v, msg->iova, msg->size);
+	}
 unlock:
 	mmap_read_unlock(dev->mm);
 free:
-	kvfree(vmas);
-	kvfree(page_list);
+	free_page((unsigned long)page_list);
 	return ret;
 }
 

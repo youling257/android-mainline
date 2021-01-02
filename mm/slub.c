@@ -2848,7 +2848,7 @@ redo:
 
 	object = c->freelist;
 	page = c->page;
-	if (unlikely(!object || !node_match(page, node))) {
+	if (unlikely(!object || !page || !node_match(page, node))) {
 		object = __slab_alloc(s, gfpflags, node, addr, c);
 		stat(s, ALLOC_SLOWPATH);
 	} else {
@@ -3091,7 +3091,7 @@ static __always_inline void do_slab_free(struct kmem_cache *s,
 	struct kmem_cache_cpu *c;
 	unsigned long tid;
 
-	memcg_slab_free_hook(s, page, head);
+	memcg_slab_free_hook(s, &head, 1);
 redo:
 	/*
 	 * Determine the currently cpus per cpu slab.
@@ -3253,6 +3253,7 @@ void kmem_cache_free_bulk(struct kmem_cache *s, size_t size, void **p)
 	if (WARN_ON(!size))
 		return;
 
+	memcg_slab_free_hook(s, p, size);
 	do {
 		struct detached_freelist df;
 
