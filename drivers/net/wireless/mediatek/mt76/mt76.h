@@ -81,6 +81,7 @@ enum mt76_rxq_id {
 	MT_RXQ_MCU,
 	MT_RXQ_MCU_WA,
 	MT_RXQ_EXT,
+	MT_RXQ_EXT_WA,
 	__MT_RXQ_MAX
 };
 
@@ -221,6 +222,7 @@ struct mt76_wcid {
 
 	u16 idx;
 	u8 hw_key_idx;
+	u8 hw_key_idx2;
 
 	u8 sta:1;
 	u8 ext_phy:1;

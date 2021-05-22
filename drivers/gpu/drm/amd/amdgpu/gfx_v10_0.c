@@ -71,6 +71,11 @@
 #define GB_ADDR_CONFIG__NUM_PKRS__SHIFT                                                                       0x8
 #define GB_ADDR_CONFIG__NUM_PKRS_MASK                                                                         0x00000700L
 
+#define mmCGTS_TCC_DISABLE_gc_10_3                 0x5006
+#define mmCGTS_TCC_DISABLE_gc_10_3_BASE_IDX        1
+#define mmCGTS_USER_TCC_DISABLE_gc_10_3            0x5007
+#define mmCGTS_USER_TCC_DISABLE_gc_10_3_BASE_IDX   1
+
 #define mmCP_MEC_CNTL_Sienna_Cichlid                      0x0f55
 #define mmCP_MEC_CNTL_Sienna_Cichlid_BASE_IDX             0
 #define mmRLC_SAFE_MODE_Sienna_Cichlid			0x4ca0
@@ -99,10 +104,6 @@
 #define mmGCR_GENERAL_CNTL_Sienna_Cichlid			0x1580
 #define mmGCR_GENERAL_CNTL_Sienna_Cichlid_BASE_IDX	0
 
-#define mmCGTS_TCC_DISABLE_Vangogh                0x5006
-#define mmCGTS_TCC_DISABLE_Vangogh_BASE_IDX       1
-#define mmCGTS_USER_TCC_DISABLE_Vangogh                0x5007
-#define mmCGTS_USER_TCC_DISABLE_Vangogh_BASE_IDX       1
 #define mmGOLDEN_TSC_COUNT_UPPER_Vangogh                0x0025
 #define mmGOLDEN_TSC_COUNT_UPPER_Vangogh_BASE_IDX       1
 #define mmGOLDEN_TSC_COUNT_LOWER_Vangogh                0x0026
@@ -3279,7 +3280,7 @@ static const struct soc15_reg_golden golden_settings_gc_10_3_4[] =
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmCPF_GCR_CNTL, 0x0007ffff, 0x0000c000),
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmDB_DEBUG3, 0x00000280, 0x00000280),
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmDB_DEBUG4, 0x07800000, 0x00800000),
-	SOC15_REG_GOLDEN_VALUE(GC, 0, mmGCR_GENERAL_CNTL, 0x00001d00, 0x00000500),
+	SOC15_REG_GOLDEN_VALUE(GC, 0, mmGCR_GENERAL_CNTL_Sienna_Cichlid, 0x00001d00, 0x00000500),
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmGE_PC_CNTL, 0x003c0000, 0x00280400),
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmGL2A_ADDR_MATCH_MASK, 0xffffffff, 0xffffffcf),
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmGL2C_ADDR_MATCH_MASK, 0xffffffff, 0xffffffcf),
@@ -4942,15 +4943,12 @@ static void gfx_v10_0_get_tcc_info(struct amdgpu_device *adev)
 	/* TCCs are global (not instanced). */
 	uint32_t tcc_disable;
 
-	switch (adev->asic_type) {
-	case CHIP_VANGOGH:
-		tcc_disable = RREG32_SOC15(GC, 0, mmCGTS_TCC_DISABLE_Vangogh) |
-				RREG32_SOC15(GC, 0, mmCGTS_USER_TCC_DISABLE_Vangogh);
-		break;
-	default:
+	if (adev->asic_type >= CHIP_SIENNA_CICHLID) {
+		tcc_disable = RREG32_SOC15(GC, 0, mmCGTS_TCC_DISABLE_gc_10_3) |
+			      RREG32_SOC15(GC, 0, mmCGTS_USER_TCC_DISABLE_gc_10_3);
+	} else {
 		tcc_disable = RREG32_SOC15(GC, 0, mmCGTS_TCC_DISABLE) |
-				RREG32_SOC15(GC, 0, mmCGTS_USER_TCC_DISABLE);
-		break;
+			      RREG32_SOC15(GC, 0, mmCGTS_USER_TCC_DISABLE);
 	}
 
 	adev->gfx.config.tcc_disabled_mask =

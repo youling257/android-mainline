@@ -473,6 +473,7 @@ smb3_parse_devname(const char *devname, struct smb3_fs_context *ctx)
 
 	/* move "pos" up to delimiter or NULL */
 	pos += len;
+	kfree(ctx->UNC);
 	ctx->UNC = kstrndup(devname, pos - devname, GFP_KERNEL);
 	if (!ctx->UNC)
 		return -ENOMEM;
@@ -482,6 +483,9 @@ smb3_parse_devname(const char *devname, struct smb3_fs_context *ctx)
 	/* skip any delimiter */
 	if (*pos == '/' || *pos == '\\')
 		pos++;
+
+	kfree(ctx->prepath);
+	ctx->prepath = NULL;
 
 	/* If pos is NULL then no prepath */
 	if (!*pos)
@@ -542,20 +546,37 @@ static int smb3_fs_context_parse_monolithic(struct fs_context *fc,
 
 	/* BB Need to add support for sep= here TBD */
 	while ((key = strsep(&options, ",")) != NULL) {
-		if (*key) {
-			size_t v_len = 0;
-			char *value = strchr(key, '=');
+		size_t len;
+		char *value;
 
-			if (value) {
-				if (value == key)
-					continue;
-				*value++ = 0;
-				v_len = strlen(value);
-			}
-			ret = vfs_parse_fs_string(fc, key, value, v_len);
-			if (ret < 0)
-				break;
+		if (*key == 0)
+			break;
+
+		/* Check if following character is the deliminator If yes,
+		 * we have encountered a double deliminator reset the NULL
+		 * character to the deliminator
+		 */
+		while (options && options[0] == ',') {
+			len = strlen(key);
+			strcpy(key + len, options);
+			options = strchr(options, ',');
+			if (options)
+				*options++ = 0;
 		}
+
+
+		len = 0;
+		value = strchr(key, '=');
+		if (value) {
+			if (value == key)
+				continue;
+			*value++ = 0;
+			len = strlen(value);
+		}
+
+		ret = vfs_parse_fs_string(fc, key, value, len);
+		if (ret < 0)
+			break;
 	}
 
 	return ret;
@@ -957,6 +978,9 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 			goto cifs_parse_mount_err;
 		}
 		ctx->max_channels = result.uint_32;
+		/* If more than one channel requested ... they want multichan */
+		if (result.uint_32 > 1)
+			ctx->multichannel = true;
 		break;
 	case Opt_handletimeout:
 		ctx->handle_timeout = result.uint_32;
@@ -1158,9 +1182,11 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		pr_warn_once("Witness protocol support is experimental\n");
 		break;
 	case Opt_rootfs:
-#ifdef CONFIG_CIFS_ROOT
-		ctx->rootfs = true;
+#ifndef CONFIG_CIFS_ROOT
+		cifs_dbg(VFS, "rootfs support requires CONFIG_CIFS_ROOT config option\n");
+		goto cifs_parse_mount_err;
 #endif
+		ctx->rootfs = true;
 		break;
 	case Opt_posixpaths:
 		if (result.negated)

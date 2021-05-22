@@ -290,7 +290,7 @@ cifs_statfs(struct dentry *dentry, struct kstatfs *buf)
 		rc = server->ops->queryfs(xid, tcon, cifs_sb, buf);
 
 	free_xid(xid);
-	return 0;
+	return rc;
 }
 
 static long cifs_fallocate(struct file *file, int mode, loff_t off, loff_t len)
@@ -475,7 +475,8 @@ static int cifs_show_devname(struct seq_file *m, struct dentry *root)
 		seq_puts(m, "none");
 	else {
 		convert_delimiter(devname, '/');
-		seq_puts(m, devname);
+		/* escape all spaces in share names */
+		seq_escape(m, devname, " \t");
 		kfree(devname);
 	}
 	return 0;
@@ -822,7 +823,7 @@ cifs_smb3_do_mount(struct file_system_type *fs_type,
 		goto out;
 	}
 
-	rc = cifs_setup_volume_info(cifs_sb->ctx, NULL, old_ctx->UNC);
+	rc = cifs_setup_volume_info(cifs_sb->ctx, NULL, NULL);
 	if (rc) {
 		root = ERR_PTR(rc);
 		goto out;

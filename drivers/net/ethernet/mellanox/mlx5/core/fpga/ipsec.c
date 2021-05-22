@@ -124,7 +124,7 @@ struct mlx5_fpga_ipsec {
 	struct ida halloc;
 };
 
-static bool mlx5_fpga_is_ipsec_device(struct mlx5_core_dev *mdev)
+bool mlx5_fpga_is_ipsec_device(struct mlx5_core_dev *mdev)
 {
 	if (!mdev->fpga || !MLX5_CAP_GEN(mdev, fpga))
 		return false;
@@ -850,7 +850,7 @@ mlx5_fpga_ipsec_release_sa_ctx(struct mlx5_fpga_ipsec_sa_ctx *sa_ctx)
 		return;
 	}
 
-	if (sa_ctx->fpga_xfrm->accel_xfrm.attrs.action &
+	if (sa_ctx->fpga_xfrm->accel_xfrm.attrs.action ==
 	    MLX5_ACCEL_ESP_ACTION_DECRYPT)
 		ida_simple_remove(&fipsec->halloc, sa_ctx->sa_handle);
 

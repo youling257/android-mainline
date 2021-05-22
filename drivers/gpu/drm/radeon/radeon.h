@@ -575,6 +575,8 @@ struct radeon_gem {
 	struct list_head	objects;
 };
 
+extern const struct drm_gem_object_funcs radeon_gem_object_funcs;
+
 int radeon_gem_init(struct radeon_device *rdev);
 void radeon_gem_fini(struct radeon_device *rdev);
 int radeon_gem_object_create(struct radeon_device *rdev, unsigned long size,
@@ -1557,6 +1559,7 @@ struct radeon_dpm {
 	void                    *priv;
 	u32			new_active_crtcs;
 	int			new_active_crtc_count;
+	int			high_pixelclock_count;
 	u32			current_active_crtcs;
 	int			current_active_crtc_count;
 	bool single_display;
